@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Robot Bípedo — Panel de Administración</title>
+  <style>
+    :root {
+      --bg:#0D1117;--surface:#161B22;--border:#30363D;
+      --accent:#00FFAA;--accent2:#58A6FF;--warn:#F0883E;
+      --danger:#F85149;--success:#3FB950;--text:#E6EDF3;--muted:#8B949E;
+    }
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;}
+    header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between;}
+    header h1{font-size:1.2rem;color:var(--accent);letter-spacing:1px;}
+    #server-status{display:flex;align-items:center;gap:8px;font-size:.85rem;color:var(--muted);}
+    .dot{width:8px;height:8px;border-radius:50%;background:var(--danger);transition:background .3s;}
+    .dot.ok{background:var(--success);}
+    main{padding:24px;max-width:1400px;margin:0 auto;}
+    .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:28px;}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 16px;}
+    .card .label{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;}
+    .card .value{font-size:2rem;font-weight:700;color:var(--accent);}
+    .card .sub{font-size:.8rem;color:var(--muted);margin-top:4px;}
+    .tabs{display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid var(--border);}
+    .tab{padding:10px 20px;cursor:pointer;font-size:.9rem;color:var(--muted);border-bottom:2px solid transparent;transition:all .2s;}
+    .tab:hover{color:var(--text);}
+    .tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+    .tab-content{display:none;}.tab-content.active{display:block;}
+    .table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px;}
+    table{width:100%;border-collapse:collapse;font-size:.875rem;}
+    th{background:var(--surface);padding:12px 16px;text-align:left;font-weight:600;color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.8px;border-bottom:1px solid var(--border);}
+    td{padding:11px 16px;border-bottom:1px solid var(--border);}
+    tr:last-child td{border-bottom:none;}
+    tr:hover td{background:rgba(255,255,255,.03);}
+    .badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:.75rem;font-weight:600;}
+    .badge-ok{background:rgba(63,185,80,.15);color:var(--success);}
+    .badge-fail{background:rgba(248,81,73,.15);color:var(--danger);}
+    .badge-active{background:rgba(0,255,170,.12);color:var(--accent);}
+    .badge-inactive{background:rgba(139,148,158,.15);color:var(--muted);}
+    .badge-used{background:rgba(240,136,62,.15);color:var(--warn);}
+    .badge-avail{background:rgba(88,166,255,.15);color:var(--accent2);}
+    .panel{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px;margin-bottom:20px;}
+    .panel h3{font-size:1rem;margin-bottom:18px;color:var(--accent2);}
+    .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;}
+    label{font-size:.8rem;color:var(--muted);display:block;margin-bottom:5px;}
+    input,select{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:.9rem;outline:none;transition:border-color .2s;}
+    input:focus,select:focus{border-color:var(--accent2);}
+    .btn{padding:9px 20px;border:none;border-radius:6px;cursor:pointer;font-size:.875rem;font-weight:600;transition:opacity .2s;}
+    .btn:hover{opacity:.85;}
+    .btn-accent{background:var(--accent);color:#000;}
+    .btn-blue{background:var(--accent2);color:#000;}
+    .btn-sm{padding:5px 12px;font-size:.8rem;}
+    .actions{display:flex;gap:10px;margin-top:16px;align-items:center;}
+    .refresh-bar{display:flex;align-items:center;gap:12px;margin-bottom:16px;font-size:.85rem;color:var(--muted);}
+    #last-update{font-size:.8rem;color:var(--muted);}
+    .empty-msg{text-align:center;color:var(--muted);padding:32px;font-size:.9rem;}
+    .toast{position:fixed;bottom:24px;right:24px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 20px;font-size:.875rem;box-shadow:0 4px 20px rgba(0,0,0,.4);z-index:999;display:none;color:var(--text);}
+    .toast.show{display:block;}
+    .price{color:var(--success);font-weight:600;}
+    .discount{color:var(--warn);}
+  </style>
+</head>
+<body>
+<header>
+  <h1>🤖 Robot Bípedo — Panel de Administración</h1>
+  <div id="server-status">
+    <span class="dot" id="dot"></span>
+    <span id="status-text">Conectando…</span>
+    <span id="last-update"></span>
+  </div>
+</header>
+<main>
+  <div class="cards">
+    <div class="card"><div class="label">Clientes registrados</div><div class="value" id="stat-clientes">—</div><div class="sub">cédulas únicas</div></div>
+    <div class="card"><div class="label">Transacciones hoy</div><div class="value" id="stat-hoy">—</div><div class="sub" id="stat-total-trans">— totales</div></div>
+    <div class="card"><div class="label">Tasa de éxito</div><div class="value" id="stat-tasa">—</div><div class="sub">QR válidos / total</div></div>
+    <div class="card"><div class="label">Ingresos totales</div><div class="value" id="stat-ingresos">—</div><div class="sub">USD generados</div></div>
+    <div class="card"><div class="label">Productos activos</div><div class="value" id="stat-productos">—</div><div class="sub" id="stat-qr">— QR disponibles</div></div>
+    <div class="card"><div class="label">Frames procesados</div><div class="value" id="stat-frames">—</div><div class="sub" id="stat-fps">— fps promedio</div></div>
+  </div>
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('transacciones',this)">Transacciones</div>
+    <div class="tab" onclick="switchTab('clientes',this)">Clientes</div>
+    <div class="tab" onclick="switchTab('productos',this)">Productos</div>
+    <div class="tab" onclick="switchTab('qrcodes',this)">QR Codes</div>
+  </div>
+
+  <div id="tab-transacciones" class="tab-content active">
+    <div class="refresh-bar"><button class="btn btn-blue btn-sm" onclick="loadTransacciones()">↻ Actualizar</button><span>Auto-refresh cada 10 s</span></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Timestamp</th><th>Cédula</th><th>Producto</th><th>Precio base</th><th>Descuento</th><th>Total</th><th>Estado</th></tr></thead>
+      <tbody id="tbody-trans"><tr><td colspan="8" class="empty-msg">Cargando…</td></tr></tbody>
+    </table></div>
+  </div>
+
+  <div id="tab-clientes" class="tab-content">
+    <div class="refresh-bar"><button class="btn btn-blue btn-sm" onclick="loadClientes()">↻ Actualizar</button></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Cédula</th><th>Primera visita</th><th>Última visita</th><th>Total visitas</th></tr></thead>
+      <tbody id="tbody-clientes"><tr><td colspan="5" class="empty-msg">Cargando…</td></tr></tbody>
+    </table></div>
+  </div>
+
+  <div id="tab-productos" class="tab-content">
+    <div class="panel">
+      <h3>+ Agregar producto</h3>
+      <div class="form-grid">
+        <div><label>Nombre</label><input id="p-nombre" type="text" placeholder="Gaseosa 500ml"/></div>
+        <div><label>Precio base (USD)</label><input id="p-precio" type="number" step="0.01" min="0.01" placeholder="1.50"/></div>
+        <div><label>Descuento (0.20 = 20%)</label><input id="p-descuento" type="number" step="0.01" min="0" max="1" placeholder="0.20"/></div>
+        <div><label>Estado</label><select id="p-activo"><option value="true">Activo</option><option value="false">Inactivo</option></select></div>
+      </div>
+      <div class="actions"><button class="btn btn-accent" onclick="crearProducto()">Crear producto</button></div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Nombre</th><th>Precio base</th><th>Descuento</th><th>Precio final</th><th>Estado</th><th>Acciones</th></tr></thead>
+      <tbody id="tbody-productos"><tr><td colspan="7" class="empty-msg">Cargando…</td></tr></tbody>
+    </table></div>
+  </div>
+
+  <div id="tab-qrcodes" class="tab-content">
+    <div class="panel">
+      <h3>+ Agregar QR code</h3>
+      <div class="form-grid">
+        <div><label>Código QR (texto embebido)</label><input id="q-codigo" type="text" placeholder="PROD:Gaseosa 500ml|DESC:0.20|BASE:1.50"/></div>
+        <div><label>Producto ID</label><input id="q-prodid" type="number" min="1" placeholder="1"/></div>
+        <div><label>Tipo</label><select id="q-unique"><option value="false">Reutilizable</option><option value="true">Uso único</option></select></div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-accent" onclick="crearQR()">Agregar QR</button>
+        <button class="btn btn-blue" onclick="autoQR()">Generar código desde producto</button>
+      </div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Código</th><th>Producto ID</th><th>Tipo</th><th>Estado</th><th>Creado</th></tr></thead>
+      <tbody id="tbody-qr"><tr><td colspan="6" class="empty-msg">Cargando…</td></tr></tbody>
+    </table></div>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+<script>
+const API='';
+function fmt(n,d=2){return n!=null?parseFloat(n).toFixed(d):'—';}
+function fmtTs(ts){if(!ts)return'—';const d=new Date(ts+(ts.endsWith('Z')?'':'Z'));return d.toLocaleString('es-EC',{timeZone:'America/Guayaquil'});}
+async function api(path,opts={}){const r=await fetch(API+path,opts);if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}
+function toast(msg,ok=true){const el=document.getElementById('toast');el.textContent=(ok?'✅ ':'❌ ')+msg;el.className='toast show';setTimeout(()=>el.className='toast',3000);}
+function switchTab(name,el){document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+name).classList.add('active');el.classList.add('active');({transacciones:loadTransacciones,clientes:loadClientes,productos:loadProductos,qrcodes:loadQR})[name]?.();}
+async function loadStats(){try{const[s,srv]=await Promise.all([api('/api/stats'),api('/api/server/stats').catch(()=>({}))]);document.getElementById('stat-clientes').textContent=s.total_clientes;document.getElementById('stat-hoy').textContent=s.transacciones_hoy;document.getElementById('stat-total-trans').textContent=s.total_transacciones+' totales';document.getElementById('stat-tasa').textContent=s.tasa_exito_pct+'%';document.getElementById('stat-ingresos').textContent='$'+fmt(s.ingresos_totales_usd);document.getElementById('stat-productos').textContent=s.productos_activos;document.getElementById('stat-qr').textContent=s.qr_disponibles+' QR disponibles';document.getElementById('stat-frames').textContent=srv.frames_procesados??'—';document.getElementById('stat-fps').textContent=(srv.fps_promedio??'—')+' fps';document.getElementById('dot').className='dot ok';document.getElementById('status-text').textContent='API conectada';document.getElementById('last-update').textContent='· '+new Date().toLocaleTimeString('es-EC');}catch{document.getElementById('dot').className='dot';document.getElementById('status-text').textContent='Sin conexión';}}
+async function loadTransacciones(){const b=document.getElementById('tbody-trans');try{const rows=await api('/api/transacciones?limit=100');if(!rows.length){b.innerHTML='<tr><td colspan="8" class="empty-msg">Sin transacciones aún.</td></tr>';return;}b.innerHTML=rows.map(r=>`<tr><td>${r.id}</td><td>${fmtTs(r.timestamp)}</td><td><code>${r.cedula}</code></td><td>${r.producto_id??'—'}</td><td class="price">${r.precio_base!=null?'$'+fmt(r.precio_base):'—'}</td><td class="discount">${r.descuento!=null?(r.descuento*100).toFixed(0)+'%':'—'}</td><td class="price">${r.precio_final!=null?'$'+fmt(r.precio_final):'—'}</td><td>${r.exito?'<span class="badge badge-ok">✓ Exitosa</span>':'<span class="badge badge-fail">✗ Fallida</span>'}</td></tr>`).join('');}catch(e){b.innerHTML=`<tr><td colspan="8" class="empty-msg">Error: ${e.message}</td></tr>`;}}
+async function loadClientes(){const b=document.getElementById('tbody-clientes');try{const rows=await api('/api/clientes?limit=200');if(!rows.length){b.innerHTML='<tr><td colspan="5" class="empty-msg">Sin clientes aún.</td></tr>';return;}b.innerHTML=rows.map((r,i)=>`<tr><td>${i+1}</td><td><code>${r.cedula}</code></td><td>${fmtTs(r.primera_visita)}</td><td>${fmtTs(r.ultima_visita)}</td><td><span class="badge badge-active">${r.total_visitas} visita${r.total_visitas!==1?'s':''}</span></td></tr>`).join('');}catch(e){b.innerHTML=`<tr><td colspan="5" class="empty-msg">Error: ${e.message}</td></tr>`;}}
+async function loadProductos(){const b=document.getElementById('tbody-productos');try{const rows=await api('/api/productos');if(!rows.length){b.innerHTML='<tr><td colspan="7" class="empty-msg">Sin productos.</td></tr>';return;}b.innerHTML=rows.map(p=>`<tr><td>${p.id}</td><td>${p.nombre}</td><td class="price">$${fmt(p.precio_base)}</td><td class="discount">${p.descuento_pct}%</td><td class="price">$${fmt(p.precio_final)}</td><td>${p.activo?'<span class="badge badge-active">Activo</span>':'<span class="badge badge-inactive">Inactivo</span>'}</td><td><button class="btn btn-blue btn-sm" onclick="toggleProducto(${p.id},${!p.activo})">${p.activo?'Desactivar':'Activar'}</button></td></tr>`).join('');}catch(e){b.innerHTML=`<tr><td colspan="7" class="empty-msg">Error: ${e.message}</td></tr>`;}}
+async function crearProducto(){const body={nombre:document.getElementById('p-nombre').value.trim(),precio_base:parseFloat(document.getElementById('p-precio').value),descuento:parseFloat(document.getElementById('p-descuento').value),activo:document.getElementById('p-activo').value==='true'};if(!body.nombre||isNaN(body.precio_base)||isNaN(body.descuento)){toast('Completa todos los campos.',false);return;}try{await api('/api/productos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast('Producto creado.');loadProductos();loadStats();}catch(e){toast(e.message,false);}}
+async function toggleProducto(id,s){try{await api('/api/productos/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({activo:s})});toast('Producto '+(s?'activado':'desactivado')+'.');loadProductos();loadStats();}catch(e){toast(e.message,false);}}
+async function loadQR(){const b=document.getElementById('tbody-qr');try{const rows=await api('/api/qr');if(!rows.length){b.innerHTML='<tr><td colspan="6" class="empty-msg">Sin QR registrados.</td></tr>';return;}b.innerHTML=rows.map(q=>`<tr><td>${q.id}</td><td><code style="font-size:.72rem;word-break:break-all">${q.codigo}</code></td><td>${q.producto_id}</td><td>${q.uso_unico?'<span class="badge badge-used">Único</span>':'<span class="badge badge-avail">Reutilizable</span>'}</td><td>${q.usado?'<span class="badge badge-used">Usado</span>':'<span class="badge badge-avail">Disponible</span>'}</td><td>${fmtTs(q.creado_at)}</td></tr>`).join('');}catch(e){b.innerHTML=`<tr><td colspan="6" class="empty-msg">Error: ${e.message}</td></tr>`;}}
+async function crearQR(){const body={codigo:document.getElementById('q-codigo').value.trim(),producto_id:parseInt(document.getElementById('q-prodid').value),uso_unico:document.getElementById('q-unique').value==='true'};if(!body.codigo||isNaN(body.producto_id)){toast('Completa código y producto ID.',false);return;}try{await api('/api/qr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast('QR creado.');loadQR();loadStats();}catch(e){toast(e.message,false);}}
+async function autoQR(){const id=parseInt(document.getElementById('q-prodid').value);if(isNaN(id)){toast('Ingresa un Producto ID primero.',false);return;}try{const p=await api('/api/productos/'+id);document.getElementById('q-codigo').value=`PROD:${p.nombre}|DESC:${p.descuento}|BASE:${p.precio_base}`;toast('Código generado — revisá y hacé clic en Agregar QR.');}catch(e){toast(e.message,false);}}
+loadStats();loadTransacciones();loadProductos();loadQR();
+setInterval(loadStats,10000);setInterval(loadTransacciones,10000);
+</script>
+</body>
+</html>

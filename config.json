@@ -1,0 +1,85 @@
+{
+  "_comentario": "Configuración centralizada del Robot Bípedo. Editá este archivo para ajustar parámetros sin tocar el código.",
+
+  "red": {
+    "pc_ip": "192.168.1.100",
+    "zmq_puerto": 5555,
+    "api_puerto": 8000,
+    "_nota_pc_ip": "Ejecuta 'hostname -I' en la PC para obtener tu IP en la red local."
+  },
+
+  "vision": {
+    "jpeg_calidad": 60,
+    "camara_ancho": 320,
+    "camara_alto": 240,
+    "camara_fps": 15,
+    "camara_index": 0,
+    "mediapipe_confianza_deteccion": 0.70,
+    "mediapipe_confianza_seguimiento": 0.50,
+    "dedos_minimos_palma_abierta": 4,
+    "qr_segunda_pasada_otsu": true,
+    "_nota": "jpeg_calidad entre 40-70 es buen balance latencia/calidad en red local."
+  },
+
+  "gpio_pi": {
+    "_nota": "Numeración BCM (no física). Pull-up interno habilitado en todos.",
+    "boton_mas":    17,
+    "boton_menos":  27,
+    "boton_ok":     22,
+    "boton_del":    23
+  },
+
+  "uart": {
+    "puerto": "/dev/ttyAMA0",
+    "baud_rate": 115200,
+    "timeout_s": 1.0,
+    "max_reintentos": 3
+  },
+
+  "robot": {
+    "tiempo_resultado_pantalla_s": 15,
+    "cedula_digitos": 10,
+    "pais": "Ecuador",
+    "_nota_cedula": "La validación del algoritmo Módulo 10 está implementada en pi_gui_gpio.py."
+  },
+
+  "productos": [
+    {
+      "id": 1,
+      "nombre": "Gaseosa 500ml",
+      "precio_base": 1.50,
+      "descuento": 0.20,
+      "activo": true,
+      "qr_codigo": "PROD:Gaseosa 500ml|DESC:0.20|BASE:1.50"
+    },
+    {
+      "id": 2,
+      "nombre": "Agua Mineral 1L",
+      "precio_base": 0.80,
+      "descuento": 0.15,
+      "activo": true,
+      "qr_codigo": "PROD:Agua Mineral 1L|DESC:0.15|BASE:0.80"
+    },
+    {
+      "id": 3,
+      "nombre": "Snack Papas 150g",
+      "precio_base": 2.25,
+      "descuento": 0.25,
+      "activo": true,
+      "qr_codigo": "PROD:Snack Papas 150g|DESC:0.25|BASE:2.25"
+    },
+    {
+      "id": 4,
+      "nombre": "Jugo Natural 300ml",
+      "precio_base": 1.75,
+      "descuento": 0.10,
+      "activo": false,
+      "qr_codigo": "PROD:Jugo Natural 300ml|DESC:0.10|BASE:1.75"
+    }
+  ],
+
+  "base_de_datos": {
+    "ruta": "robot_bipedo.db",
+    "_nota": "Ruta relativa al directorio desde donde se ejecutan los scripts de la PC."
+  }
+}
