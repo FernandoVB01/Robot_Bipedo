@@ -1,0 +1,119 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="balancing_robot">
+
+  <!-- ==== Parametros (deben coincidir con p_vals de MATLAB) ==== -->
+  <!-- Ejes ROS: x adelante, z arriba => x_com(MATLAB)->x, y_com(MATLAB)->z -->
+  <xacro:property name="wheel_radius" value="0.05"/>
+  <xacro:property name="wheel_width"  value="0.02"/>
+  <xacro:property name="wheel_sep"    value="0.20"/>
+  <xacro:property name="wheel_mass"   value="0.15"/>   <!-- por rueda -->
+  <xacro:property name="body_mass"    value="1.2"/>
+  <xacro:property name="x_com"        value="0.020"/>  <!-- adelante -->
+  <xacro:property name="z_com"        value="0.150"/>  <!-- = y_com MATLAB -->
+
+  <!-- ==== Chasis: solido rigido con COM desplazado ==== -->
+  <link name="base_link">
+    <inertial>
+      <!-- AQUI vive la fisica del desfase gamma -->
+      <origin xyz="${x_com} 0 ${z_com}" rpy="0 0 0"/>
+      <mass value="${body_mass}"/>
+      <!-- Ib de MATLAB = iyy (giro de cabeceo). ixx/izz: de tu CAD -->
+      <inertia ixx="0.015" ixy="0" ixz="0"
+               iyy="0.015" iyz="0" izz="0.005"/>
+    </inertial>
+    <!-- Visual con "rodilla": dos segmentos, solo estetico -->
+    <visual>
+      <origin xyz="0 0 0.06" rpy="0 0 0"/>
+      <geometry><box size="0.04 0.12 0.12"/></geometry>
+    </visual>
+    <visual>
+      <origin xyz="0.03 0 0.16" rpy="0 0.4 0"/>
+      <geometry><box size="0.04 0.12 0.10"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0.01 0 0.11" rpy="0 0 0"/>
+      <geometry><box size="0.08 0.12 0.22"/></geometry>
+    </collision>
+  </link>
+
+  <!-- ==== Macro de rueda ==== -->
+  <xacro:macro name="wheel" params="prefix y_pos">
+    <link name="${prefix}_wheel_link">
+      <inertial>
+        <mass value="${wheel_mass}"/>
+        <inertia ixx="1e-4" ixy="0" ixz="0" iyy="2e-4" iyz="0" izz="1e-4"/>
+      </inertial>
+      <visual>
+        <origin rpy="${pi/2} 0 0"/>
+        <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+      </visual>
+      <collision>
+        <origin rpy="${pi/2} 0 0"/>
+        <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+      </collision>
+    </link>
+    <joint name="${prefix}_wheel_joint" type="continuous">
+      <parent link="base_link"/>
+      <child link="${prefix}_wheel_link"/>
+      <origin xyz="0 ${y_pos} 0" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <dynamics damping="0.001" friction="0.0"/>
+    </joint>
+    <gazebo reference="${prefix}_wheel_link">
+      <mu1>1.5</mu1> <mu2>1.5</mu2>   <!-- friccion: evita derrape -->
+    </gazebo>
+  </xacro:macro>
+  <xacro:wheel prefix="left"  y_pos="${ wheel_sep/2}"/>
+  <xacro:wheel prefix="right" y_pos="${-wheel_sep/2}"/>
+
+  <!-- ==== IMU ==== -->
+  <link name="imu_link">
+    <inertial><mass value="0.01"/>
+      <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+    </inertial>
+  </link>
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/> <child link="imu_link"/>
+    <origin xyz="0 0 0.10"/>
+  </joint>
+
+  <gazebo reference="imu_link">
+    <sensor name="imu_sensor" type="imu">
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <plugin name="imu_plugin" filename="libgazebo_ros_imu_sensor.so">
+        <ros>
+          <remapping>~/out:=imu</remapping>   <!-- publica en /imu -->
+        </ros>
+        <initial_orientation_as_reference>false</initial_orientation_as_reference>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+  <!-- ==== ros2_control: interfaz de ESFUERZO (torque) ==== -->
+  <ros2_control name="GazeboSystem" type="system">
+    <hardware>
+      <plugin>gazebo_ros2_control/GazeboSystem</plugin>
+    </hardware>
+    <joint name="left_wheel_joint">
+      <command_interface name="effort">
+        <param name="min">-2.0</param> <param name="max">2.0</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="right_wheel_joint">
+      <command_interface name="effort">
+        <param name="min">-2.0</param> <param name="max">2.0</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+  <gazebo>
+    <plugin filename="libgazebo_ros2_control.so" name="gazebo_ros2_control">
+      <parameters>$(find balancing_robot)/config/controllers.yaml</parameters>
+    </plugin>
+  </gazebo>
+</robot>

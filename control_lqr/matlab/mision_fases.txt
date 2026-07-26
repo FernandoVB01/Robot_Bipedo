@@ -1,0 +1,6 @@
+[INFO] [1784415768.556954359] [trajectory_generator]: t=0.0s -> ESTABILIZANDO
+[INFO] [1784415776.550962327] [trajectory_generator]: t=8.0s -> RECTA 1
+[INFO] [1784415781.537414338] [trajectory_generator]: t=13.0s -> OCHO (circulo izq)
+[INFO] [1784415797.248499758] [trajectory_generator]: t=28.7s -> OCHO (circulo der)
+[INFO] [1784415812.960267751] [trajectory_generator]: t=44.4s -> RECTA 2
+[INFO] [1784415817.965073646] [trajectory_generator]: t=49.4s -> FIN (alto y balanceando)

@@ -1,0 +1,10 @@
+# Tick de FreeRTOS a 1 kHz.
+# Por defecto ESP-IDF usa 100 Hz (10 ms): con eso no se puede temporizar un
+# lazo de 200-500 Hz. El lazo de control usa esp_timer (microsegundos), pero
+# subir el tick evita sorpresas en el resto de las tareas.
+CONFIG_FREERTOS_HZ=1000
+
+# El watchdog de tarea vigila ambos nucleos.
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5

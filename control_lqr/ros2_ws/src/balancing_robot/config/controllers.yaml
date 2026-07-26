@@ -1,0 +1,15 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 100          # coherente con Ts = 0.01 s del LQR
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    effort_controller:
+      type: effort_controllers/JointGroupEffortController
+
+effort_controller:
+  ros__parameters:
+    joints:
+      - left_wheel_joint
+      - right_wheel_joint
