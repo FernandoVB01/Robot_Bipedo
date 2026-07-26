@@ -120,6 +120,8 @@ class Transaccion(Base):
     precio_final = Column(Float,   nullable=True)
     exito        = Column(Boolean, default=True, nullable=False)  # ¿El QR fue válido?
     timestamp    = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    # ¿Ya se subió esta transacción a Firebase? False = pendiente de reintento.
+    sincronizado_firebase = Column(Boolean, default=False, nullable=False, index=True)
 
     cliente_rel  = relationship("Cliente",  back_populates="transacciones")
     producto_rel = relationship("Producto", back_populates="transacciones")
@@ -150,12 +152,38 @@ class Database:
             echo=False,
         )
         Base.metadata.create_all(self._engine)
+        self._migrar_columnas_faltantes()
         print(f"[DB] Base de datos lista: {os.path.abspath(db_path)}")
 
     # ── Utilidades internas ──────────────────────────────────────────────────
 
     def _session(self) -> Session:
         return Session(self._engine)
+
+    def _migrar_columnas_faltantes(self):
+        """
+        Migración ligera para bases de datos creadas antes de agregar columnas
+        nuevas. create_all() NO altera tablas existentes, así que agregamos las
+        columnas que falten con ALTER TABLE. Es idempotente y seguro.
+        """
+        migraciones = {
+            "transacciones": {
+                "sincronizado_firebase": "BOOLEAN NOT NULL DEFAULT 0",
+            },
+        }
+        with self._engine.begin() as conn:
+            for tabla, columnas in migraciones.items():
+                existentes = {
+                    row[1] for row in conn.execute(
+                        text(f"PRAGMA table_info({tabla})")
+                    )
+                }
+                for col, definicion in columnas.items():
+                    if col not in existentes:
+                        conn.execute(
+                            text(f"ALTER TABLE {tabla} ADD COLUMN {col} {definicion}")
+                        )
+                        print(f"[DB] Migración: columna '{col}' añadida a '{tabla}'.")
 
     @staticmethod
     def _load_db_path_from_config() -> str:
@@ -360,6 +388,30 @@ class Database:
             ).offset(offset).limit(limit).all()
             return [self._transaccion_to_dict(r) for r in rows]
 
+    # ── Sincronización con Firebase ──────────────────────────────────────────
+
+    def marcar_sincronizado(self, transaccion_id: int) -> bool:
+        """Marca una transacción como ya subida a Firebase."""
+        with self._session() as s:
+            t = s.get(Transaccion, transaccion_id)
+            if t is None:
+                return False
+            t.sincronizado_firebase = True
+            s.commit()
+            return True
+
+    def get_pendientes_firebase(self, limit: int = 500) -> list[dict]:
+        """
+        Devuelve las transacciones que todavía no se subieron a Firebase
+        (por falta de internet u otro fallo). Usado por sync_firebase.py.
+        """
+        with self._session() as s:
+            rows = (s.query(Transaccion)
+                     .filter_by(sincronizado_firebase=False)
+                     .order_by(Transaccion.timestamp.asc())
+                     .limit(limit).all())
+            return [self._transaccion_to_dict(r) for r in rows]
+
     # ── Estadísticas para el dashboard ──────────────────────────────────────
 
     def get_stats(self) -> dict:
@@ -444,6 +496,7 @@ class Database:
             "precio_final": t.precio_final,
             "exito":        t.exito,
             "timestamp":    t.timestamp.isoformat(),
+            "sincronizado_firebase": t.sincronizado_firebase,
         }
 
 
@@ -451,3 +504,4 @@ class Database:
 # Instancia global compartida (importar en los demás módulos)
 # ─────────────────────────────────────────────────────────────────────────────
 db = Database()
+# --- fin del módulo database.py ---

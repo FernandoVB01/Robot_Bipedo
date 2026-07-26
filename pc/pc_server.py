@@ -77,6 +77,20 @@ except ImportError:
     print("[PC-SERVER] WARN: database.py no encontrado — sin registro en BD.")
 
 # ──────────────────────────────────────────────
+# FIREBASE (espejo en la nube, opcional)
+# Importación resiliente: si falta la librería, las credenciales o internet,
+# el robot sigue funcionando con SQLite y las facturas quedan pendientes de
+# subir (se reintentan con sync_firebase.py).
+# ──────────────────────────────────────────────
+try:
+    from firebase_client import fb as _fb
+    FIREBASE_AVAILABLE = True
+except Exception as _exc:   # noqa: BLE001 — nunca debe tumbar el servidor
+    FIREBASE_AVAILABLE = False
+    _fb = None
+    print(f"[PC-SERVER] WARN: firebase_client no disponible — {_exc}")
+
+# ──────────────────────────────────────────────
 # MEDIAPIPE — Detección de manos (Tasks API, mediapipe >= 0.10.30)
 # ──────────────────────────────────────────────
 _MODEL_PATH = Path(__file__).parent / "hand_landmarker.task"
@@ -246,7 +260,7 @@ def _registrar_en_bd(cedula: str | None, qr_data: str | None):
 
             if qr_info:
                 prod = _db.get_producto_by_id(qr_info["producto_id"])
-                _db.registrar_transaccion(
+                trans = _db.registrar_transaccion(
                     cedula      = cedula,
                     qr_codigo   = qr_data,
                     producto_id = qr_info["producto_id"],
@@ -258,7 +272,7 @@ def _registrar_en_bd(cedula: str | None, qr_data: str | None):
                       f"producto={prod['nombre'] if prod else 'N/A'}")
             else:
                 # QR no encontrado o ya usado: registrar como fallido
-                _db.registrar_transaccion(
+                trans = _db.registrar_transaccion(
                     cedula      = cedula,
                     qr_codigo   = qr_data,
                     producto_id = None,
@@ -267,6 +281,18 @@ def _registrar_en_bd(cedula: str | None, qr_data: str | None):
                     exito       = False,
                 )
                 print(f"[DB] QR inválido registrado: cédula={cedula}")
+
+            # ── Escritura doble: espejo en la nube (Firebase) ──
+            # SQLite es la fuente de verdad; Firebase es la copia consultable.
+            # Si falla (sin internet, sin credenciales), la transacción queda
+            # con sincronizado_firebase=False y sync_firebase.py la reintenta.
+            if FIREBASE_AVAILABLE and _fb is not None and _fb.esta_disponible():
+                if _fb.guardar_transaccion(trans):
+                    _db.marcar_sincronizado(trans["id"])
+                    print(f"[FIREBASE] Transacción {trans['id']} subida a la nube.")
+                else:
+                    print(f"[FIREBASE] Transacción {trans['id']} quedó pendiente "
+                          f"de subir (se reintentará luego).")
 
         except Exception as exc:
             print(f"[DB] ERROR al registrar transacción: {exc}")
@@ -352,7 +378,7 @@ def run_server():
                     _inc("pulgares_arriba")
 
             elif mode == "QR":
-                qr = decode_qr(frame)
+                qr = decode_qr(frame)  # noqa
                 response["qr_data"] = qr
                 if qr:
                     _inc("qr_decodificados")

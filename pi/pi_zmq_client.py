@@ -37,17 +37,27 @@ import json
 import time
 import threading
 import numpy as np
+from pathlib import Path
 from queue import Queue, Empty
 
 # ──────────────────────────────────────────────
 # CONFIGURACIÓN
 # ──────────────────────────────────────────────
+# Cargar config.json para permitir usar el celular como cámara IP sin tocar código
+_CFG_PATH = Path(__file__).parent.parent / "config.json"
+try:
+    _CFG = json.loads(_CFG_PATH.read_text(encoding="utf-8"))
+except Exception:
+    _CFG = {}
+_V = _CFG.get("vision", {})
+
 DEFAULT_PC_IP      = "192.168.1.100"   # ← Cambia a la IP real de tu PC
 DEFAULT_PORT       = 5555
-JPEG_QUALITY       = 60               # Compresión agresiva para bajo ancho de banda
-FRAME_WIDTH        = 320              # Resolución reducida para menor latencia
-FRAME_HEIGHT       = 240
-CAMERA_INDEX       = 0                # /dev/video0
+JPEG_QUALITY       = _V.get("jpeg_calidad", 60)   # Compresión para bajo ancho de banda
+FRAME_WIDTH        = _V.get("camara_ancho", 320)  # Resolución reducida para menor latencia
+FRAME_HEIGHT       = _V.get("camara_alto", 240)
+CAMERA_INDEX       = _V.get("camara_index", 0)    # /dev/video0 (webcam local)
+CAMERA_URL         = _V.get("camara_url", "")     # Si está definido, usa el celular (cámara IP)
 RECONNECT_DELAY_S  = 3.0              # Segundos entre reintentos de conexión
 
 
@@ -109,7 +119,23 @@ class VisionClient:
     # ── HILO INTERNO ─────────────────────────────────────────────────────────
 
     def _init_camera(self) -> bool:
-        """Abre la cámara y configura la resolución."""
+        """
+        Abre la cámara. Dos modos según config.json:
+          - camara_url vacío  → webcam/cámara local (/dev/video<index>) vía V4L2.
+          - camara_url con URL → cámara IP del celular (ej. app IP Webcam por WiFi).
+        """
+        if CAMERA_URL:
+            # Cámara IP (celular). Backend por defecto (FFMPEG) para streams de red.
+            print(f"[PI-CLIENT] Abriendo cámara IP: {CAMERA_URL}")
+            self._cap = cv2.VideoCapture(CAMERA_URL)
+            if not self._cap.isOpened():
+                print(f"[PI-CLIENT] ERROR: No se pudo abrir la cámara IP ({CAMERA_URL}). "
+                      f"Verificá que la app del celular esté transmitiendo y en la misma red WiFi.")
+                return False
+            print(f"[PI-CLIENT] Cámara IP lista (celular).")
+            return True
+
+        # Webcam / cámara local
         self._cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_V4L2)
         if not self._cap.isOpened():
             print("[PI-CLIENT] ERROR: No se pudo abrir la cámara.")

@@ -47,6 +47,15 @@ from pydantic import BaseModel, Field
 sys.path.insert(0, str(Path(__file__).parent))
 from database import db
 
+# Firebase (espejo en la nube, opcional y resiliente)
+try:
+    from firebase_client import fb as _fb
+    FIREBASE_AVAILABLE = True
+except Exception as _exc:   # noqa: BLE001 — nunca debe tumbar la API
+    FIREBASE_AVAILABLE = False
+    _fb = None
+    print(f"[API] WARN: firebase_client no disponible — {_exc}")
+
 # Intentar importar stats vivas del servidor ZeroMQ (si corre en el mismo proceso)
 try:
     from pc_server import get_live_stats, set_active_cedula
@@ -128,6 +137,11 @@ class TransaccionManual(BaseModel):
 
 class CedulaActiva(BaseModel):
     cedula: str = Field(..., min_length=10, max_length=10)
+
+class RegistrarVenta(BaseModel):
+    """Venta completa que envía la Raspberry al terminar el flujo."""
+    cedula:    str = Field(..., min_length=10, max_length=10, example="1234567890")
+    qr_codigo: str = Field(..., example="PROD:Gaseosa 500ml|DESC:0.20|BASE:1.50")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -262,6 +276,53 @@ async def listar_transacciones(
 ):
     return db.get_transacciones(limit=limit, offset=offset, cedula=cedula)
 
+def _mirror_a_firebase(trans: dict):
+    """Sube la transacción a Firebase (si está activo) y la marca sincronizada."""
+    if FIREBASE_AVAILABLE and _fb is not None and _fb.esta_disponible():
+        if _fb.guardar_transaccion(trans):
+            db.marcar_sincronizado(trans["id"])
+            print(f"[FIREBASE] Transacción {trans['id']} subida a la nube.")
+        else:
+            print(f"[FIREBASE] Transacción {trans['id']} quedó pendiente de subir.")
+
+
+@app.post("/api/transacciones", status_code=201, tags=["Transacciones"],
+          summary="Registrar una venta completa (la envía la Raspberry)")
+async def registrar_venta(body: RegistrarVenta):
+    """
+    Punto de entrada real desde el robot: recibe cédula + código QR, valida el
+    QR contra la BD, calcula precio/descuento, registra la transacción en SQLite
+    y la espeja en Firebase. Devuelve la transacción registrada.
+    """
+    qr_info = db.validar_y_usar_qr(body.qr_codigo)
+    if qr_info:
+        prod = db.get_producto_by_id(qr_info["producto_id"])
+        t = db.registrar_transaccion(
+            cedula      = body.cedula,
+            qr_codigo   = body.qr_codigo,
+            producto_id = qr_info["producto_id"],
+            precio_base = prod["precio_base"] if prod else None,
+            descuento   = prod["descuento"]   if prod else None,
+            exito       = True,
+        )
+        print(f"[DB] Venta registrada: cédula={body.cedula} "
+              f"producto={prod['nombre'] if prod else 'N/A'}")
+    else:
+        # QR no válido o ya usado: se registra como intento fallido
+        t = db.registrar_transaccion(
+            cedula      = body.cedula,
+            qr_codigo   = body.qr_codigo,
+            producto_id = None,
+            precio_base = None,
+            descuento   = None,
+            exito       = False,
+        )
+        print(f"[DB] QR inválido registrado: cédula={body.cedula}")
+
+    _mirror_a_firebase(t)
+    return t
+
+
 @app.post("/api/transacciones/manual", status_code=201, tags=["Transacciones"],
           summary="Registrar manualmente una transacción (testing/corrección)")
 async def registrar_transaccion_manual(body: TransaccionManual):
@@ -273,6 +334,7 @@ async def registrar_transaccion_manual(body: TransaccionManual):
         descuento   = body.descuento,
         exito       = body.exito,
     )
+    _mirror_a_firebase(t)
     return t
 
 # Endpoint para que la Pi informe la cédula activa al servidor ZeroMQ

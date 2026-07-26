@@ -27,6 +27,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -62,6 +64,32 @@
 #define VESC_DUTY_STOP      0.00f
 #define GIRO_180_MS         2000    /* Tiempo estimado para 180° */
 
+/* ── Controlador VESC (protocolo binario oficial por UART) ────────────────────
+ * Controlador dual: el ESP32 habla por UART a UNA VESC (maestra) y le manda al
+ * segundo motor por CAN (la maestra reenvía). Ajustá según tu VESC Tool:        */
+#define VESC_DUAL              1   /* 1 = dos motores (uno por UART, otro por CAN) */
+#define VESC_CAN_ID_MOTOR_2    25  /* CAN ID de la 2ª VESC (VESC Tool → App → Controller ID) */
+#define VESC_INVERTIR_MOTOR_2  0   /* 1 si el robot GIRA en vez de ir derecho (motores enfrentados) */
+
+/* IDs de comando del protocolo VESC (de datatypes.h del firmware bldc) */
+#define COMM_SET_DUTY          5
+#define COMM_FORWARD_CAN       34
+
+/* Valores por defecto para AVANZAR_T si la Pi no manda parámetros */
+#define AVANZAR_T_MS_DEFAULT    5000    /* 5 segundos */
+#define AVANZAR_T_DUTY_DEFAULT  0.25f   /* 25 % */
+
+/* ── Sensores infrarrojos (obstáculos) — a futuro ─────────────────────────────
+ * Poné IR_SENSORS_ENABLED en 1 cuando cablees los sensores.
+ * La mayoría de sensores IR de obstáculo (tipo FC-51) dan nivel BAJO (0) al
+ * detectar algo cerca; ajustá IR_OBSTACLE_LEVEL según tu sensor.
+ * Nota: GPIO 34/35 son solo-entrada en el ESP32 (sin pull interno), ideales
+ * para leer la salida digital de estos sensores.                              */
+#define IR_SENSORS_ENABLED   0
+#define IR_SENSOR_LEFT_PIN   GPIO_NUM_34
+#define IR_SENSOR_RIGHT_PIN  GPIO_NUM_35
+#define IR_OBSTACLE_LEVEL    0
+
 /* ─────────────────────────────────────────────────────────────────────────────
  * TIPOS Y ENUMERACIONES
  * ──────────────────────────────────────────────────────────────────────────── */
@@ -72,12 +100,16 @@ typedef enum {
     CMD_GIRAR_180,
     CMD_ACERCAR,
     CMD_RETROCEDER,
+    CMD_AVANZAR_T,        /* Avanzar por tiempo y velocidad, luego parar */
+    CMD_RODAR,            /* Rodar continuo a una velocidad (modo atracción) */
     CMD_DESCONOCIDO
 } robot_command_t;
 
 typedef struct {
     robot_command_t cmd;
-    char            raw[32];   /* Texto original del comando */
+    char            raw[32];       /* Texto original del comando */
+    int             duracion_ms;   /* Para AVANZAR_T: cuánto avanzar */
+    float           duty;          /* Para AVANZAR_T: velocidad [-1..1] */
 } command_msg_t;
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -105,7 +137,7 @@ static void uart_pi_init(void)
         .parity     = UART_PARITY_DISABLE,
         .stop_bits  = UART_STOP_BITS_1,
         .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
+        .source_clk = UART_SCLK_APB,
     };
 
     ESP_ERROR_CHECK(uart_driver_install(PI_UART_NUM,
@@ -134,7 +166,7 @@ static void uart_vesc_init(void)
         .parity     = UART_PARITY_DISABLE,
         .stop_bits  = UART_STOP_BITS_1,
         .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
+        .source_clk = UART_SCLK_APB,
     };
 
     ESP_ERROR_CHECK(uart_driver_install(VESC_UART_NUM,
@@ -161,32 +193,113 @@ static void led_init(void)
     gpio_set_level(STATUS_LED_PIN, 0);
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
- * INTERFAZ CON EL VESC
- * Nota: El VESC puede recibir comandos por UART usando su protocolo binario
- * (bldc_interface). Aquí se implementa una versión ASCII simplificada que
- * muchos firmwares VESC personalizados soportan.  Para el protocolo binario
- * oficial ver: https://github.com/vedderb/bldc
- * ──────────────────────────────────────────────────────────────────────────── */
+/**
+ * @brief Inicializa los pines de los sensores IR de obstáculo (a futuro).
+ *        No hace nada si IR_SENSORS_ENABLED está en 0.
+ */
+static void ir_init(void)
+{
+#if IR_SENSORS_ENABLED
+    gpio_set_direction(IR_SENSOR_LEFT_PIN,  GPIO_MODE_INPUT);
+    gpio_set_direction(IR_SENSOR_RIGHT_PIN, GPIO_MODE_INPUT);
+    ESP_LOGI(TAG_MAIN, "Sensores IR activados: izq=%d der=%d",
+             IR_SENSOR_LEFT_PIN, IR_SENSOR_RIGHT_PIN);
+#endif
+}
 
 /**
- * @brief Envía un comando de duty cycle al VESC vía UART.
- *        Formato ASCII sencillo: "SET_DUTY <valor>\n"
- *        Ajusta según el firmware de tu VESC.
+ * @brief Devuelve true si algún sensor IR detecta un obstáculo cercano.
+ *        Con IR_SENSORS_ENABLED=0 siempre devuelve false (sensores no cableados).
+ */
+static bool obstaculo_detectado(void)
+{
+#if IR_SENSORS_ENABLED
+    int izq = gpio_get_level(IR_SENSOR_LEFT_PIN);
+    int der = gpio_get_level(IR_SENSOR_RIGHT_PIN);
+    return (izq == IR_OBSTACLE_LEVEL) || (der == IR_OBSTACLE_LEVEL);
+#else
+    return false;
+#endif
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * INTERFAZ CON EL VESC — Protocolo binario oficial (firmware bldc de Vedder)
+ * Un paquete VESC por UART es:
+ *   [0x02][len][payload...][CRC16_hi][CRC16_lo][0x03]
+ * El CRC16 (CCITT/XMODEM, poly 0x1021) se calcula sobre el payload.
+ * Referencia: https://github.com/vedderb/bldc
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** @brief CRC16 CCITT (XMODEM) usado por el protocolo VESC. */
+static uint16_t vesc_crc16(const uint8_t *buf, unsigned int len)
+{
+    uint16_t crc = 0;
+    for (unsigned int i = 0; i < len; i++) {
+        crc ^= (uint16_t)buf[i] << 8;
+        for (int b = 0; b < 8; b++) {
+            if (crc & 0x8000) crc = (uint16_t)((crc << 1) ^ 0x1021);
+            else              crc = (uint16_t)(crc << 1);
+        }
+    }
+    return crc;
+}
+
+/** @brief Arma y envía un paquete VESC (payload corto, < 256 bytes). */
+static void vesc_send_packet(const uint8_t *payload, int len)
+{
+    uint8_t buf[64];
+    int idx = 0;
+    buf[idx++] = 0x02;                       /* start (paquete corto) */
+    buf[idx++] = (uint8_t)len;               /* longitud del payload  */
+    memcpy(&buf[idx], payload, len); idx += len;
+    uint16_t crc = vesc_crc16(payload, (unsigned)len);
+    buf[idx++] = (uint8_t)(crc >> 8);
+    buf[idx++] = (uint8_t)(crc & 0xFF);
+    buf[idx++] = 0x03;                       /* end */
+    uart_write_bytes(VESC_UART_NUM, (const char *)buf, (size_t)idx);
+}
+
+/** @brief Carga un duty (int32 = duty*100000, big-endian) en el payload. */
+static int vesc_append_set_duty(uint8_t *p, int i, float duty)
+{
+    int32_t d = (int32_t)(duty * 100000.0f);
+    p[i++] = COMM_SET_DUTY;
+    p[i++] = (uint8_t)(d >> 24);
+    p[i++] = (uint8_t)(d >> 16);
+    p[i++] = (uint8_t)(d >> 8);
+    p[i++] = (uint8_t)(d);
+    return i;
+}
+
+/**
+ * @brief Fija el duty en AMBOS motores del controlador dual.
+ *        Motor 1: por UART directo a la VESC maestra.
+ *        Motor 2: la maestra lo reenvía por CAN a la esclava (COMM_FORWARD_CAN).
  *
- * @param duty  Ciclo de trabajo [-1.0 .. 1.0].
- *              Positivo = adelante, negativo = atrás, 0 = parar.
+ * @param duty  Ciclo de trabajo [-1.0 .. 1.0]. + = adelante, 0 = parar.
  */
 static void vesc_set_duty(float duty)
 {
-    char buf[64];
-    /* Clamp para no exceder rango */
     if (duty >  1.0f) duty =  1.0f;
     if (duty < -1.0f) duty = -1.0f;
 
-    int len = snprintf(buf, sizeof(buf), "SET_DUTY %.4f\n", (double)duty);
-    uart_write_bytes(VESC_UART_NUM, buf, (size_t)len);
-    ESP_LOGD(TAG_VESC, "→ VESC: %s", buf);
+    /* Motor 1 (VESC conectada por UART) */
+    uint8_t p1[8];
+    int n1 = vesc_append_set_duty(p1, 0, duty);
+    vesc_send_packet(p1, n1);
+
+#if VESC_DUAL
+    /* Motor 2 (VESC por CAN): [COMM_FORWARD_CAN][can_id][COMM_SET_DUTY][int32] */
+    float duty2 = VESC_INVERTIR_MOTOR_2 ? -duty : duty;
+    uint8_t p2[8];
+    int n2 = 0;
+    p2[n2++] = COMM_FORWARD_CAN;
+    p2[n2++] = VESC_CAN_ID_MOTOR_2;
+    n2 = vesc_append_set_duty(p2, n2, duty2);
+    vesc_send_packet(p2, n2);
+#endif
+
+    ESP_LOGD(TAG_VESC, "→ VESC duty=%.3f", (double)duty);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -203,6 +316,9 @@ static robot_command_t parse_command(const char *str)
     if (strcmp(str, "GIRAR_180")  == 0) return CMD_GIRAR_180;
     if (strcmp(str, "ACERCAR")    == 0) return CMD_ACERCAR;
     if (strcmp(str, "RETROCEDER") == 0) return CMD_RETROCEDER;
+    /* Comandos con parámetros */
+    if (strncmp(str, "AVANZAR_T:", 10) == 0) return CMD_AVANZAR_T;
+    if (strncmp(str, "RODAR:", 6) == 0)      return CMD_RODAR;
     return CMD_DESCONOCIDO;
 }
 
@@ -252,6 +368,26 @@ static void task_pi_receiver(void *pvParameters)
             msg.cmd = cmd;
             strncpy(msg.raw, line_buf, sizeof(msg.raw) - 1);
             msg.raw[sizeof(msg.raw) - 1] = '\0';
+            /* Valores por defecto para AVANZAR_T */
+            msg.duracion_ms = AVANZAR_T_MS_DEFAULT;
+            msg.duty        = AVANZAR_T_DUTY_DEFAULT;
+
+            if (cmd == CMD_AVANZAR_T) {
+                /* Extraer parámetros: "AVANZAR_T:<ms>:<duty>" */
+                int   ms_tmp   = 0;
+                float duty_tmp = 0.0f;
+                if (sscanf(line_buf, "AVANZAR_T:%d:%f", &ms_tmp, &duty_tmp) == 2) {
+                    msg.duracion_ms = ms_tmp;
+                    msg.duty        = duty_tmp;
+                }
+                /* Si el formato falla, quedan los valores por defecto (5 s, 25 %) */
+            } else if (cmd == CMD_RODAR) {
+                /* Extraer velocidad: "RODAR:<duty>" */
+                float duty_tmp = 0.0f;
+                if (sscanf(line_buf, "RODAR:%f", &duty_tmp) == 1) {
+                    msg.duty = duty_tmp;
+                }
+            }
 
             if (cmd != CMD_DESCONOCIDO) {
                 /* Encolar para la tarea de control */
@@ -293,72 +429,85 @@ static void task_pi_receiver(void *pvParameters)
 static void task_robot_control(void *pvParameters)
 {
     command_msg_t msg;
+    float modo_duty = 0.0f;   /* Duty continuo a mantener (rolling); 0 = parado */
 
-    ESP_LOGI(TAG_MAIN, "Tarea de control iniciada. Esperando comandos…");
-
-    /* Estado inicial: parado */
-    vesc_set_duty(VESC_DUTY_STOP);
+    ESP_LOGI(TAG_MAIN, "Tarea de control iniciada.");
+    vesc_set_duty(0.0f);
 
     while (1) {
-        /* Bloquear hasta recibir un comando (sin timeout = espera indefinida) */
-        if (xQueueReceive(cmd_queue, &msg, portMAX_DELAY) != pdTRUE) {
-            continue;
-        }
+        /* Esperar un comando hasta 50 ms. Ese timeout también sirve de "tick":
+         * en cada vuelta se reenvía el duty actual, así el rodado continuo NO se
+         * corta (la VESC frena el motor si no recibe comandos por ~1 s). */
+        if (xQueueReceive(cmd_queue, &msg, pdMS_TO_TICKS(50)) == pdTRUE) {
+            ESP_LOGI(TAG_MAIN, "Ejecutando: %s", msg.raw);
+            gpio_set_level(STATUS_LED_PIN, 1);
 
-        ESP_LOGI(TAG_MAIN, "Ejecutando: %s", msg.raw);
-        gpio_set_level(STATUS_LED_PIN, 1);   /* LED on durante acción */
+            switch (msg.cmd) {
 
-        switch (msg.cmd) {
+                case CMD_RODAR:
+                    /* Rodar continuo (modo atracción): mantiene este duty */
+                    modo_duty = msg.duty;
+                    ESP_LOGI(TAG_MAIN, "RODAR continuo a duty %.2f", (double)modo_duty);
+                    break;
 
-            case CMD_AVANZAR:
-                vesc_set_duty(VESC_DUTY_AVANZAR);
-                break;
+                case CMD_PARAR:
+                    modo_duty = 0.0f;
+                    break;
 
-            case CMD_PARAR:
-                vesc_set_duty(VESC_DUTY_STOP);
-                break;
+                case CMD_AVANZAR:
+                    modo_duty = VESC_DUTY_AVANZAR;   /* rueda continuo (compat.) */
+                    break;
 
-            case CMD_ACERCAR:
-                vesc_set_duty(VESC_DUTY_ACERCAR);
-                break;
+                case CMD_ACERCAR:
+                    modo_duty = VESC_DUTY_ACERCAR;
+                    break;
 
-            case CMD_RETROCEDER:
-                vesc_set_duty(VESC_DUTY_RETRO);
-                break;
+                case CMD_RETROCEDER:
+                    modo_duty = VESC_DUTY_RETRO;
+                    break;
 
-            case CMD_GIRAR_180:
-                /*
-                 * Estrategia de giro 180°:
-                 * El bípedo gira aplicando duty positivo a una rueda/pierna
-                 * y negativo a la otra. Aquí se implementa de forma simplificada
-                 * enviando un comando de "GIRO" al VESC durante GIRO_180_MS ms.
-                 * Ajusta GIRO_180_MS experimentalmente según la tracción.
-                 */
-                vesc_set_duty(VESC_DUTY_STOP);
-                vTaskDelay(pdMS_TO_TICKS(100));
-
-                /* Enviar comando de giro (formato depende de tu VESC firmware) */
-                {
-                    const char *giro_cmd = "GIRO_DERECHA\n";
-                    uart_write_bytes(VESC_UART_NUM, giro_cmd, strlen(giro_cmd));
+                case CMD_AVANZAR_T: {
+                    /* Acción temporizada: aplica el duty (puede ser NEGATIVO =
+                     * giro/retroceso contrario) por N ms y luego queda PARADO.
+                     * Reenvía cada 50 ms y se frena si un sensor IR ve obstáculo. */
+                    int t = 0;
+                    ESP_LOGI(TAG_MAIN, "AVANZAR_T: %d ms a duty %.2f",
+                             msg.duracion_ms, (double)msg.duty);
+                    while (t < msg.duracion_ms) {
+                        if (obstaculo_detectado()) {
+                            ESP_LOGW(TAG_MAIN, "¡Obstáculo! Deteniendo.");
+                            break;
+                        }
+                        vesc_set_duty(msg.duty);
+                        vTaskDelay(pdMS_TO_TICKS(50));
+                        t += 50;
+                    }
+                    modo_duty = 0.0f;   /* al terminar, queda parado */
+                    break;
                 }
-                vTaskDelay(pdMS_TO_TICKS(GIRO_180_MS));
 
-                /* Detener giro */
-                vesc_set_duty(VESC_DUTY_STOP);
-                vTaskDelay(pdMS_TO_TICKS(200));
+                case CMD_GIRAR_180: {
+                    /* Giro simplificado: retrocede GIRO_180_MS y queda parado. */
+                    int t = 0;
+                    while (t < GIRO_180_MS) {
+                        vesc_set_duty(VESC_DUTY_RETRO);
+                        vTaskDelay(pdMS_TO_TICKS(50));
+                        t += 50;
+                    }
+                    modo_duty = 0.0f;
+                    break;
+                }
 
-                /* Continuar avanzando después del giro */
-                vesc_set_duty(VESC_DUTY_AVANZAR);
-                break;
-
-            case CMD_DESCONOCIDO:
-            default:
-                ESP_LOGW(TAG_MAIN, "Comando desconocido en cola — ignorado.");
-                break;
+                case CMD_DESCONOCIDO:
+                default:
+                    ESP_LOGW(TAG_MAIN, "Comando desconocido — ignorado.");
+                    break;
+            }
+            gpio_set_level(STATUS_LED_PIN, 0);
         }
 
-        gpio_set_level(STATUS_LED_PIN, 0);   /* LED off */
+        /* Tick: reenviar el duty continuo actual (rodando o parado) */
+        vesc_set_duty(modo_duty);
     }
 }
 
@@ -374,6 +523,7 @@ void app_main(void)
 
     /* ── 1. Inicializar hardware ─────────────────────────────────────────── */
     led_init();
+    ir_init();
     uart_pi_init();
     uart_vesc_init();
 

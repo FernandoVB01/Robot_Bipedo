@@ -32,6 +32,7 @@ Flujo de estados:
 """
 
 import sys, os, math, time, random, threading, json
+import urllib.request
 import numpy as np
 from enum import Enum, auto
 from queue import Queue, Empty
@@ -66,7 +67,17 @@ except Exception:
     _CFG = {}
 
 PC_IP         = _CFG.get("red", {}).get("pc_ip", "192.168.1.100")
+API_PORT      = _CFG.get("red", {}).get("api_puerto", 8000)
+API_BASE      = f"http://{PC_IP}:{API_PORT}"
 CEDULA_DIGITS = _CFG.get("robot", {}).get("cedula_digitos", 10)
+# Avance al detectar la mano (lo ejecuta el ESP32 con AVANZAR_T)
+AVANCE_MS       = _CFG.get("robot", {}).get("avance_al_ver_mano_ms", 5000)
+AVANCE_VELOCIDAD = _CFG.get("robot", {}).get("avance_al_ver_mano_velocidad", 0.25)
+# Modo atracción: ruedas rodando continuo, giro contrario al ver la mano, timeout de QR
+RODAR_VELOCIDAD  = _CFG.get("robot", {}).get("rodar_velocidad", 0.10)
+GIRO_CONTRARIO_MS  = _CFG.get("robot", {}).get("giro_contrario_ms", 1000)
+GIRO_CONTRARIO_VEL = _CFG.get("robot", {}).get("giro_contrario_velocidad", -0.10)
+QR_TIMEOUT_S     = _CFG.get("robot", {}).get("qr_timeout_s", 20)
 
 _G = _CFG.get("gpio_pi", {})
 # 4 botones físicos en protoboard (pull-up interno de la Pi)
@@ -191,6 +202,7 @@ class RobotApp:
         self.digits = [0]*CEDULA_DIGITS
         self.cur_pos = 0
         self.qr_info = None
+        self.qr_raw  = None          # Código QR crudo, para registrar la venta
         self.cedula_str = ""
         self.particles = [Particle() for _ in range(80)]
         self.stars = [(random.randint(0,SCREEN_W),random.randint(0,SCREEN_H),random.uniform(0.3,1.2)) for _ in range(120)]
@@ -237,12 +249,19 @@ class RobotApp:
         except Exception as e: print(f"[GUI] Vision: {e}")
         try:
             self.uart=UARTController(); self.uart.connect()
+            # Arranca en modo atracción: ruedas rodando continuo
+            if self.uart: self.uart.send_command(f"RODAR:{RODAR_VELOCIDAD}")
         except Exception as e: print(f"[GUI] UART: {e}")
 
     def _goto(self, st):
         self.state=st; self.state_ts=time.time(); self.anim_t=0.0
         if st==State.CEDULA: self.digits=[0]*CEDULA_DIGITS; self.cur_pos=0
         if st==State.EXITO: self._sound_exito_played=False
+        # Al volver a reposo (atracción): rueda continuo y la cámara vuelve a
+        # detectar la mano (por si venía de QR_SCAN, p.ej. tras timeout).
+        if st==State.IDLE:
+            if self.uart: self.uart.send_command(f"RODAR:{RODAR_VELOCIDAD}")
+            if self.vision: self.vision.set_mode("HAND")
         print(f"[GUI] → {st.name}")
 
     def _elapsed(self): return time.time()-self.state_ts
@@ -265,6 +284,8 @@ class RobotApp:
                     self.sounds["click"].play()
                 else:
                     self.cedula_str = "".join(str(d) for d in self.digits)
+                    # Cédula + QR listos: registrar la venta en la PC (SQLite + Firebase)
+                    self._registrar_venta(self.cedula_str, self.qr_raw)
                     if self.vision: self.vision.set_mode("HAND")
                     self._goto(State.FACTURA)
             elif ev == "BTN_BACK":
@@ -285,19 +306,50 @@ class RobotApp:
         r=self.vision.get_last_result()
         if not r: return
         if self.state==State.IDLE:
-            if r.get("hand_detected"):
-                if self.uart: self.uart.send_command("PARAR"); time.sleep(0.2); self.uart.send_command("GIRAR_180")
-            elif r.get("thumbs_up"):
+            if r.get("hand_detected") or r.get("thumbs_up"):
+                # Al ver la mano: giro contrario 1s y frena (giro en la maqueta),
+                # luego pasa a esperar el QR. Lo ejecuta el ESP32 (AVANZAR_T con
+                # duty negativo = sentido contrario al rodado).
                 self.sounds["scan"].play()
+                if self.uart:
+                    self.uart.send_command(
+                        f"AVANZAR_T:{int(GIRO_CONTRARIO_MS)}:{GIRO_CONTRARIO_VEL}")
                 if self.vision: self.vision.set_mode("QR")
-                if self.uart: self.uart.send_command("PARAR")
                 self._goto(State.QR_SCAN)
         elif self.state==State.QR_SCAN:
             qr=r.get("qr_data")
             if qr:
                 self.sounds["scan"].play()
+                self.qr_raw=qr
                 self.qr_info=self._parse_qr(qr)
                 self._goto(State.SALUDO)
+
+    def _registrar_venta(self, cedula, qr_codigo):
+        """
+        Envía la venta a la API de la PC (POST /api/transacciones) en un hilo
+        aparte para no congelar la GUI. La PC la guarda en SQLite y la sube a
+        Firebase. Si la PC no responde, el robot sigue funcionando igual.
+        """
+        if not cedula or not qr_codigo:
+            print("[VENTA] Sin cédula o QR — no se registra.")
+            return
+
+        def _worker():
+            try:
+                datos = json.dumps({"cedula": cedula,
+                                    "qr_codigo": qr_codigo}).encode("utf-8")
+                req = urllib.request.Request(
+                    f"{API_BASE}/api/transacciones",
+                    data=datos,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    print(f"[VENTA] Registrada en la PC (HTTP {resp.status}).")
+            except Exception as exc:
+                print(f"[VENTA] No se pudo registrar en la PC: {exc}")
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _parse_qr(self, s):
         try:
@@ -448,11 +500,14 @@ class RobotApp:
                 except Empty: pass
                 self._poll_vision()
                 el=self._elapsed()
-                if self.state==State.SALUDO  and el>10: self._goto(State.CEDULA)
+                if self.state==State.QR_SCAN and el>QR_TIMEOUT_S:
+                    # No leyó QR en el tiempo límite: agradece y vuelve a rodar
+                    self.sounds["success"].play(); self._goto(State.EXITO)
+                elif self.state==State.SALUDO  and el>10: self._goto(State.CEDULA)
                 elif self.state==State.FACTURA and el>14:
                     self.sounds["success"].play(); self._goto(State.EXITO)
                 elif self.state==State.EXITO  and el>7:
-                    if self.uart: self.uart.send_command("AVANZAR")
+                    # Vuelve a reposo; _goto(IDLE) reanuda el rodado (RODAR)
                     self._goto(State.IDLE)
                 if self.state==State.EXITO and not self._sound_exito_played:
                     self.sounds["success"].play(); self._sound_exito_played=True
@@ -460,7 +515,11 @@ class RobotApp:
                 pygame.display.flip()
         finally:
             if self.vision: self.vision.stop()
-            if self.uart: self.uart.disconnect()
+            if self.uart:
+                # Frenar las ruedas al salir (Ctrl+C o ESC) antes de cerrar el puerto
+                try: self.uart.send_command("PARAR")
+                except Exception: pass
+                self.uart.disconnect()
             pygame.quit()
 
 if __name__=="__main__":

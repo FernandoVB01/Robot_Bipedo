@@ -118,9 +118,13 @@ class UARTController:
             command: Uno de VALID_COMMANDS.
         """
         command = command.strip().upper()
-        if command not in VALID_COMMANDS:
+        # AVANZAR_T:<ms>:<duty> y RODAR:<duty> llevan parámetros, se aceptan por prefijo.
+        es_valido = (command in VALID_COMMANDS
+                     or command.startswith("AVANZAR_T:")
+                     or command.startswith("RODAR:"))
+        if not es_valido:
             print(f"[UART] Comando inválido: '{command}'. "
-                  f"Válidos: {VALID_COMMANDS}")
+                  f"Válidos: {VALID_COMMANDS}, 'AVANZAR_T:<ms>:<duty>' o 'RODAR:<duty>'")
             return False
 
         if not self._connected or not self._serial:

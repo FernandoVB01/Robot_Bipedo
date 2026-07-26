@@ -14,6 +14,8 @@
     "camara_alto": 240,
     "camara_fps": 15,
     "camara_index": 0,
+    "camara_url": "",
+    "_nota_camara_url": "Vacío = usa la webcam local (camara_index). Para usar el celular como cámara IP, poné aquí la URL del stream, ej: 'http://192.168.100.50:8080/video' (app IP Webcam en Android).",
     "mediapipe_confianza_deteccion": 0.70,
     "mediapipe_confianza_seguimiento": 0.50,
     "dedos_minimos_palma_abierta": 4,
@@ -40,7 +42,15 @@
     "tiempo_resultado_pantalla_s": 15,
     "cedula_digitos": 10,
     "pais": "Ecuador",
-    "_nota_cedula": "La validación del algoritmo Módulo 10 está implementada en pi_gui_gpio.py."
+    "_nota_cedula": "La validación del algoritmo Módulo 10 está implementada en pi_gui_gpio.py.",
+    "avance_al_ver_mano_ms": 5000,
+    "avance_al_ver_mano_velocidad": 0.10,
+    "_nota_avance": "Cuando la cámara detecta la mano, el robot avanza este tiempo (ms) a esta velocidad (duty 0.0-1.0) y se detiene solo. La ejecución la maneja el ESP32 (comando AVANZAR_T).",
+    "rodar_velocidad": 0.10,
+    "giro_contrario_ms": 1000,
+    "giro_contrario_velocidad": -0.10,
+    "qr_timeout_s": 20,
+    "_nota_atraccion": "Modo atracción: en reposo las ruedas ruedan continuo a rodar_velocidad. Al ver la mano giran en sentido contrario (giro_contrario_velocidad, negativo) por giro_contrario_ms y frenan. Si pasan qr_timeout_s esperando el QR sin leer nada, agradece y vuelve a rodar."
   },
 
   "productos": [
@@ -81,5 +91,14 @@
   "base_de_datos": {
     "ruta": "robot_bipedo.db",
     "_nota": "Ruta relativa al directorio desde donde se ejecutan los scripts de la PC."
+  },
+
+  "firebase": {
+    "activo": true,
+    "archivo_credenciales": "firebase_credentials.json",
+    "coleccion_transacciones": "transacciones",
+    "coleccion_clientes": "clientes",
+    "_nota_activar": "Poné activo=true cuando tengas el JSON de credenciales guardado en pc/. Mientras esté en false, el robot funciona solo con SQLite local.",
+    "_nota_credenciales": "Descargá el archivo desde: consola de Firebase -> Configuracion del proyecto -> Cuentas de servicio -> Generar nueva clave privada. Guardalo en pc/ con el nombre de arriba. NO lo subas a git (ya esta en .gitignore). Pasos detallados en pc/FIREBASE_SETUP.md."
   }
 }

@@ -1,0 +1,20 @@
+# ── Credenciales Firebase (NUNCA subir a git) ──
+pc/firebase_credentials.json
+**/firebase_credentials.json
+*serviceAccount*.json
+
+# ── Base de datos local ──
+pc/robot_bipedo.db
+*.db
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── Editor / SO ──
+.vscode/
+.DS_Store
+Thumbs.db
