@@ -187,12 +187,23 @@ class Database:
 
     @staticmethod
     def _load_db_path_from_config() -> str:
+        """
+        Ruta del .db. Una ruta relativa se resuelve contra la RAÍZ del repo
+        (donde vive config.json), no contra el directorio actual: si no, la GUI
+        lanzada desde ~ y la API lanzada desde pc/ crearían dos bases distintas
+        y las ventas aparecerían "perdidas".
+        """
         try:
             with open(_CONFIG_PATH, encoding="utf-8") as f:
                 cfg = json.load(f)
-            return cfg.get("base_de_datos", {}).get("ruta", _DEFAULT_DB)
-        except (FileNotFoundError, KeyError):
-            return _DEFAULT_DB
+            ruta = cfg.get("base_de_datos", {}).get("ruta", _DEFAULT_DB)
+        except (FileNotFoundError, KeyError, json.JSONDecodeError):
+            ruta = _DEFAULT_DB
+
+        p = Path(ruta).expanduser()
+        if not p.is_absolute():
+            p = _CONFIG_PATH.parent / p
+        return str(p)
 
     # ── Seed inicial desde config.json ──────────────────────────────────────
 

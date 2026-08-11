@@ -59,6 +59,13 @@ try:
 except ImportError:
     MODULES_OK = False
 
+# Movimiento de la cámara: opcional, el robot funciona igual sin él
+try:
+    from foscam_ptz import FoscamPTZ
+    PTZ_OK = True
+except ImportError:
+    PTZ_OK = False
+
 # ── Config ─────────────────────────────────────────────────────────────────
 _CFG_PATH = _HERE.parent / "config.json"
 try:
@@ -66,7 +73,9 @@ try:
 except Exception:
     _CFG = {}
 
-PC_IP         = _CFG.get("red", {}).get("pc_ip", "192.168.1.100")
+# ROBOT_PC_IP pisa el config.json: la IP de la PC en el hotspot cambia seguido.
+PC_IP         = os.environ.get("ROBOT_PC_IP") \
+                or _CFG.get("red", {}).get("pc_ip", "192.168.43.50")
 API_PORT      = _CFG.get("red", {}).get("api_puerto", 8000)
 API_BASE      = f"http://{PC_IP}:{API_PORT}"
 CEDULA_DIGITS = _CFG.get("robot", {}).get("cedula_digitos", 10)
@@ -78,6 +87,7 @@ RODAR_VELOCIDAD  = _CFG.get("robot", {}).get("rodar_velocidad", 0.10)
 GIRO_CONTRARIO_MS  = _CFG.get("robot", {}).get("giro_contrario_ms", 1000)
 GIRO_CONTRARIO_VEL = _CFG.get("robot", {}).get("giro_contrario_velocidad", -0.10)
 QR_TIMEOUT_S     = _CFG.get("robot", {}).get("qr_timeout_s", 20)
+PTZ_PATRULLA     = _CFG.get("ptz", {}).get("patrulla_en_reposo", True)
 
 _G = _CFG.get("gpio_pi", {})
 # 4 botones físicos en protoboard (pull-up interno de la Pi)
@@ -90,8 +100,21 @@ PIN_BTN_MINUS = _G.get("boton_menos", 27)
 PIN_BTN_OK    = _G.get("boton_ok",    22)
 PIN_BTN_DEL   = _G.get("boton_del",   23)
 
+# Lienzo VIRTUAL en el que se dibuja todo. No cambiarlo: las seis pantallas
+# usan coordenadas absolutas calculadas para este tamaño.
 SCREEN_W, SCREEN_H = 1280, 720
-FPS = 60
+
+# Panel FÍSICO (Tontec 3.5" SPI = 480x320). El lienzo virtual se escala a esto
+# de una sola pasada al final de cada frame.
+_P = _CFG.get("pantalla", {})
+PANEL_W        = _P.get("ancho", SCREEN_W)
+PANEL_H        = _P.get("alto",  SCREEN_H)
+FULLSCREEN     = _P.get("fullscreen", True)
+OCULTAR_CURSOR = _P.get("ocultar_cursor", True)
+ESCALAR        = (PANEL_W, PANEL_H) != (SCREEN_W, SCREEN_H)
+
+# A 480x320 sobre SPI el bus no da para 60 fps y solo calienta la CPU.
+FPS = 30 if ESCALAR else 60
 
 # ── Colores ─────────────────────────────────────────────────────────────────
 class C:
@@ -131,14 +154,25 @@ def _make_sound(freqs, durs, vol=0.5, sr=44100):
     s16 = (pcm * 32767).astype(np.int16)
     return pygame.sndarray.make_sound(np.column_stack([s16, s16]).copy())
 
+class _SilentSound:
+    """Sustituto mudo: deja que el robot funcione sin tarjeta de audio."""
+    def play(self, *a, **kw): pass
+
 def create_sounds():
-    pygame.mixer.init(44100, -16, 2, 512)
-    return {
-        "success": _make_sound([523,659,784,1047,1319],[0.12,0.12,0.12,0.18,0.35],0.6),
-        "click":   _make_sound([880],[0.06],0.3),
-        "scan":    _make_sound([1200,900],[0.07,0.1],0.35),
-        "error":   _make_sound([300,250],[0.1,0.2],0.4),
-    }
+    # Con la pantalla SPI no hay audio por HDMI; si el jack no está configurado,
+    # mixer.init() lanza excepción. El robot debe seguir andando igual, solo
+    # que en silencio.
+    try:
+        pygame.mixer.init(44100, -16, 2, 512)
+        return {
+            "success": _make_sound([523,659,784,1047,1319],[0.12,0.12,0.12,0.18,0.35],0.6),
+            "click":   _make_sound([880],[0.06],0.3),
+            "scan":    _make_sound([1200,900],[0.07,0.1],0.35),
+            "error":   _make_sound([300,250],[0.1,0.2],0.4),
+        }
+    except Exception as exc:
+        print(f"[GUI] Sin audio ({exc}) — el robot sigue, en silencio.")
+        return {k: _SilentSound() for k in ("success","click","scan","error")}
 
 # ── Partículas confeti ──────────────────────────────────────────────────────
 class Particle:
@@ -180,9 +214,23 @@ def glow(surf, col, cx, cy, rad, w=3, a=70):
 class RobotApp:
     def __init__(self):
         pygame.init()
-        flags = pygame.FULLSCREEN if GPIO_AVAILABLE else 0
-        self.screen = pygame.display.set_mode((SCREEN_W,SCREEN_H),flags)
+        flags = pygame.FULLSCREEN if FULLSCREEN else 0
+        # display = lo que ve el panel físico;  screen = lienzo virtual 1280x720
+        # donde dibuja todo el código. Se escala una vez por frame en run().
+        self.display = pygame.display.set_mode((PANEL_W,PANEL_H),flags)
+        # 32 bits explícitos: el framebuffer de un panel SPI suele ser RGB565
+        # (16 bits) y smoothscale solo acepta superficies de 24/32. Por eso se
+        # escala a un buffer propio de 32 y luego se hace blit (que sí convierte
+        # la profundidad de color solo).
+        self.screen  = (pygame.Surface((SCREEN_W,SCREEN_H), depth=32)
+                        if ESCALAR else self.display)
+        self._panel_buf = (pygame.Surface((PANEL_W,PANEL_H), depth=32)
+                           if ESCALAR else None)
         pygame.display.set_caption("RoboMart")
+        if OCULTAR_CURSOR:
+            pygame.mouse.set_visible(False)
+        print(f"[GUI] Panel {PANEL_W}x{PANEL_H}"
+              + (f" (lienzo virtual {SCREEN_W}x{SCREEN_H} escalado)" if ESCALAR else ""))
         self.clock = pygame.time.Clock()
 
         def F(sz, bold=False):
@@ -210,6 +258,8 @@ class RobotApp:
         self._sound_exito_played = False
         self.vision = None
         self.uart = None
+        self.ptz = None
+        self._patrullando = False
         self._setup_gpio()
         self._start_modules()
 
@@ -252,6 +302,19 @@ class RobotApp:
             # Arranca en modo atracción: ruedas rodando continuo
             if self.uart: self.uart.send_command(f"RODAR:{RODAR_VELOCIDAD}")
         except Exception as e: print(f"[GUI] UART: {e}")
+        if PTZ_OK:
+            try:
+                self.ptz=FoscamPTZ(); self.ptz.start()
+                self._set_patrulla(PTZ_PATRULLA)
+            except Exception as e: print(f"[GUI] PTZ: {e}")
+
+    def _set_patrulla(self, encender: bool):
+        """Enciende/apaga el barrido de la cámara, sin repetir la orden."""
+        if not self.ptz or not PTZ_PATRULLA:
+            return
+        if encender != self._patrullando:
+            self.ptz.patrulla(encender)
+            self._patrullando = encender
 
     def _goto(self, st):
         self.state=st; self.state_ts=time.time(); self.anim_t=0.0
@@ -262,6 +325,15 @@ class RobotApp:
         if st==State.IDLE:
             if self.uart: self.uart.send_command(f"RODAR:{RODAR_VELOCIDAD}")
             if self.vision: self.vision.set_mode("HAND")
+            # La cámara vuelve a barrer buscando clientes
+            self._set_patrulla(True)
+        else:
+            # En cuanto hay alguien delante, la cámara deja de barrer. Durante
+            # QR_SCAN además se queda totalmente quieta: una cámara en marcha
+            # mueve el encuadre y el QR sale movido, y no se decodifica.
+            self._set_patrulla(False)
+            if st==State.EXITO and self.ptz:
+                self.ptz.centrar()
         print(f"[GUI] → {st.name}")
 
     def _elapsed(self): return time.time()-self.state_ts
@@ -306,6 +378,14 @@ class RobotApp:
         r=self.vision.get_last_result()
         if not r: return
         if self.state==State.IDLE:
+            # Seguir la mano con la cámara aunque todavía no haya gesto válido:
+            # así el cliente ve que el robot "lo mira" y entiende que puede
+            # interactuar. En QR_SCAN NO se sigue, para no mover el encuadre.
+            if self.ptz and r.get("hand_x") is not None:
+                self._set_patrulla(False)
+                self.ptz.seguir(r.get("hand_x"), r.get("hand_y"))
+            elif self.ptz:
+                self._set_patrulla(True)
             if r.get("hand_detected") or r.get("thumbs_up"):
                 # Al ver la mano: giro contrario 1s y frena (giro en la maqueta),
                 # luego pasa a esperar el QR. Lo ejecuta el ESP32 (AVANZAR_T con
@@ -512,9 +592,24 @@ class RobotApp:
                 if self.state==State.EXITO and not self._sound_exito_played:
                     self.sounds["success"].play(); self._sound_exito_played=True
                 drawers[self.state]()
+                if ESCALAR:
+                    # smoothscale mantiene legible el texto al bajar a 480x320;
+                    # scale a secas deja los bordes de las letras dentados.
+                    pygame.transform.smoothscale(self.screen,
+                                                 (PANEL_W, PANEL_H),
+                                                 self._panel_buf)
+                    self.display.blit(self._panel_buf, (0, 0))
                 pygame.display.flip()
         finally:
             if self.vision: self.vision.stop()
+            if self.ptz:
+                # Parar la patrulla antes de salir: si no, la cámara se queda
+                # barriendo sola aunque el programa ya no exista.
+                try:
+                    self.ptz.patrulla(False); self.ptz.centrar()
+                    time.sleep(0.8)
+                    self.ptz.stop()
+                except Exception: pass
             if self.uart:
                 # Frenar las ruedas al salir (Ctrl+C o ESC) antes de cerrar el puerto
                 try: self.uart.send_command("PARAR")

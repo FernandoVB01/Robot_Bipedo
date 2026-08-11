@@ -39,19 +39,28 @@ Dependencias:
 =============================================================================
 """
 
+import json
 import serial
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 # ──────────────────────────────────────────────
 # CONFIGURACIÓN
 # ──────────────────────────────────────────────
-UART_PORT     = "/dev/ttyAMA0"   # Puerto UART hardware de la Pi 4
-# Alternativa si usas USB-Serial: "/dev/ttyUSB0"
-BAUD_RATE     = 115200
-TIMEOUT_S     = 1.0              # Timeout de lectura de ACK
-MAX_RETRIES   = 3                # Reintentos si no se recibe ACK
+# Se lee de config.json (sección "uart"); los valores de aquí son el respaldo.
+_CFG_PATH = Path(__file__).parent.parent / "config.json"
+try:
+    _U = json.loads(_CFG_PATH.read_text(encoding="utf-8")).get("uart", {})
+except Exception:
+    _U = {}
+
+UART_PORT     = _U.get("puerto", "/dev/ttyAMA0")   # UART hardware de la Pi 4
+# Alternativas: "/dev/serial0" (alias seguro) o "/dev/ttyUSB0" (adaptador USB-Serial)
+BAUD_RATE     = _U.get("baud_rate", 115200)
+TIMEOUT_S     = _U.get("timeout_s", 1.0)           # Timeout de lectura de ACK
+MAX_RETRIES   = _U.get("max_reintentos", 3)        # Reintentos si no se recibe ACK
 RETRY_DELAY_S = 0.2
 
 VALID_COMMANDS = {

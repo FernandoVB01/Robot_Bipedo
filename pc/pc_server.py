@@ -76,6 +76,14 @@ except ImportError:
     _db = None
     print("[PC-SERVER] WARN: database.py no encontrado — sin registro en BD.")
 
+# ¿Registrar la venta aquí, al decodificar el QR?
+# En false (por defecto) la registra solo la API cuando la Pi hace POST
+# /api/transacciones al terminar el flujo, que es el único momento en que se
+# conoce la cédula real del cliente. Registrar en los dos sitios duplicaba cada
+# venta, y la segunda entraba como fallida porque el QR de uso único ya estaba
+# consumido por la primera.
+REGISTRAR_DESDE_ZMQ = CFG.get("base_de_datos", {}).get("registrar_desde_zmq", False)
+
 # ──────────────────────────────────────────────
 # FIREBASE (espejo en la nube, opcional)
 # Importación resiliente: si falta la librería, las credenciales o internet,
@@ -170,55 +178,60 @@ def decode_frame(frame_bytes: bytes) -> np.ndarray | None:
     return frame
 
 
-def detect_open_palm(frame: np.ndarray) -> bool:
+_HAND_CENTER = 9    # MCP del dedo medio: el punto más estable como "centro" de la mano
+
+
+def analizar_mano(frame: np.ndarray) -> dict:
     """
-    True si MediaPipe detecta una palma abierta (≥ PALM_MIN_FINGERS dedos extendidos).
-    Criterio: tip.y < pip.y en coordenadas de imagen normalizadas.
-    Usa la nueva Tasks API (mediapipe >= 0.10.30).
-    """
-    rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-    result   = _hands_detector.detect(mp_image)
+    Corre MediaPipe UNA sola vez y saca de ahí todo lo que necesita el robot:
+    palma abierta, pulgar arriba y posición de la mano en la imagen.
 
-    if not result.hand_landmarks:
-        return False
+    Antes había dos funciones que llamaban cada una a _hands_detector.detect():
+    en una PC daba igual, pero corriendo en la Raspberry eso era ejecutar la red
+    neuronal dos veces por frame y partía los fps por la mitad.
 
-    for hand_landmarks in result.hand_landmarks:
-        # hand_landmarks es una lista de objetos con atributos .x .y .z
-        extended = sum(
-            1 for tip_i, pip_i in zip(_FINGER_TIP, _FINGER_PIP)
-            if hand_landmarks[tip_i].y < hand_landmarks[pip_i].y
-        )
-        if extended >= PALM_MIN_FINGERS:
-            return True
-
-    return False
-
-
-def detect_thumbs_up(frame: np.ndarray) -> bool:
-    """
-    True si MediaPipe detecta un pulgar arriba (👍).
-    Criterio:
-      - Pulgar extendido: tip(4).y < IP(3).y < MCP(2).y  (apunta hacia arriba)
-      - Al menos 3 de los otros 4 dedos están cerrados: tip.y > pip.y
+    Devuelve:
+      palma      — bool, ≥ PALM_MIN_FINGERS dedos extendidos
+      pulgar     — bool, 👍
+      x, y       — centro de la mano en coordenadas normalizadas 0.0-1.0
+                   (None si no se detectó ninguna mano). Los usa la Pi para
+                   apuntar la cámara motorizada hacia el cliente.
     """
     rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
     result   = _hands_detector.detect(mp_image)
 
+    salida = {"palma": False, "pulgar": False, "x": None, "y": None}
     if not result.hand_landmarks:
-        return False
+        return salida
 
     for lm in result.hand_landmarks:
+        extended = sum(
+            1 for tip_i, pip_i in zip(_FINGER_TIP, _FINGER_PIP)
+            if lm[tip_i].y < lm[pip_i].y
+        )
+        palma = extended >= PALM_MIN_FINGERS
+
         thumb_up = (lm[_THUMB_TIP].y < lm[_THUMB_IP].y < lm[_THUMB_MCP].y)
         fingers_curled = sum(
             1 for tip_i, pip_i in zip(_FINGER_TIP, _FINGER_PIP)
             if lm[tip_i].y > lm[pip_i].y
         )
-        if thumb_up and fingers_curled >= 3:
-            return True
+        pulgar = thumb_up and fingers_curled >= 3
 
-    return False
+        if palma or pulgar:
+            salida["palma"]  = palma
+            # Palma abierta manda: si es palma, no se reporta pulgar (igual que antes)
+            salida["pulgar"] = pulgar and not palma
+            salida["x"] = float(lm[_HAND_CENTER].x)
+            salida["y"] = float(lm[_HAND_CENTER].y)
+            return salida
+
+    # Hay mano pero sin gesto reconocido: igual sirve para seguirla con la cámara
+    lm = result.hand_landmarks[0]
+    salida["x"] = float(lm[_HAND_CENTER].x)
+    salida["y"] = float(lm[_HAND_CENTER].y)
+    return salida
 
 
 def decode_qr(frame: np.ndarray) -> str | None:
@@ -250,7 +263,7 @@ def _registrar_en_bd(cedula: str | None, qr_data: str | None):
     Registra la interacción en la base de datos si los datos son válidos.
     Se ejecuta en un hilo separado para no bloquear el bucle ZeroMQ.
     """
-    if not DB_AVAILABLE or not cedula or not qr_data:
+    if not REGISTRAR_DESDE_ZMQ or not DB_AVAILABLE or not cedula or not qr_data:
         return
 
     def _worker():
@@ -363,37 +376,24 @@ def run_server():
 
             _inc("frames_procesados")
             response: dict = {"hand_detected": False, "thumbs_up": False,
+                               "hand_x": None, "hand_y": None,
                                "qr_data": None, "error": None}
 
             # ── 3. Procesar según modo ────────────────────────────────────
-            if mode == "HAND":
-                # Detectar palma abierta (STOP) y pulgar arriba (INTERACCIÓN)
-                detected  = detect_open_palm(frame)
-                thumb_up  = detect_thumbs_up(frame) if not detected else False
-                response["hand_detected"] = detected
-                response["thumbs_up"]     = thumb_up
-                if detected:
-                    _inc("detecciones_mano")
-                if thumb_up:
-                    _inc("pulgares_arriba")
+            if mode in ("HAND", "BOTH"):
+                # Palma abierta (STOP), pulgar arriba (INTERACCIÓN) y posición
+                # de la mano (para apuntar la cámara motorizada), de una pasada.
+                m = analizar_mano(frame)
+                response["hand_detected"] = m["palma"]
+                response["thumbs_up"]     = m["pulgar"]
+                response["hand_x"]        = m["x"]
+                response["hand_y"]        = m["y"]
+                if m["palma"]:  _inc("detecciones_mano")
+                if m["pulgar"]: _inc("pulgares_arriba")
 
-            elif mode == "QR":
-                qr = decode_qr(frame)  # noqa
+            if mode in ("QR", "BOTH"):
+                qr = decode_qr(frame)
                 response["qr_data"] = qr
-                if qr:
-                    _inc("qr_decodificados")
-                    cedula = get_active_cedula()
-                    _registrar_en_bd(cedula, qr)
-
-            elif mode == "BOTH":
-                detected = detect_open_palm(frame)
-                thumb_up = detect_thumbs_up(frame) if not detected else False
-                qr       = decode_qr(frame)
-                response["hand_detected"] = detected
-                response["thumbs_up"]     = thumb_up
-                response["qr_data"]       = qr
-                if detected:  _inc("detecciones_mano")
-                if thumb_up:  _inc("pulgares_arriba")
                 if qr:
                     _inc("qr_decodificados")
                     _registrar_en_bd(get_active_cedula(), qr)

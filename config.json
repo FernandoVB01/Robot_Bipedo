@@ -2,20 +2,40 @@
   "_comentario": "Configuración centralizada del Robot Bípedo. Editá este archivo para ajustar parámetros sin tocar el código.",
 
   "red": {
-    "pc_ip": "192.168.1.100",
+    "pc_ip": "192.168.43.50",
     "zmq_puerto": 5555,
     "api_puerto": 8000,
-    "_nota_pc_ip": "Ejecuta 'hostname -I' en la PC para obtener tu IP en la red local."
+    "_nota_pc_ip": "IP de la PC DENTRO DEL HOTSPOT del celular. La PC hace la visión por computadora (MediaPipe no le da a la Pi) y la Pi le manda los frames. Sacala con 'ipconfig' en la PC, en el adaptador WiFi, campo 'Dirección IPv4'. CAMBIA cada vez que se reinicia el hotspot: verificala antes de cada sesión.",
+    "_nota_sin_editar": "Para no editar este archivo cada vez, podés exportar la variable de entorno ROBOT_PC_IP antes de lanzar la GUI: ROBOT_PC_IP=192.168.43.57 python3 pi/pi_gui_gpio.py",
+    "_nota_datos_moviles": "El tráfico Pi<->PC va por la WiFi del hotspot, NO por la red celular: no consume tu plan de datos. Los datos móviles solo hacen falta para Firebase."
+  },
+
+  "pantalla": {
+    "ancho": 480,
+    "alto": 320,
+    "fullscreen": true,
+    "ocultar_cursor": true,
+    "_nota": "Resolución FÍSICA del panel (Tontec 3.5\" SPI = 480x320). La GUI se dibuja siempre en un lienzo virtual de 1280x720 y se escala a este tamaño: no hay que retocar ninguna pantalla del código.",
+    "_nota_hdmi": "Para probar en un monitor HDMI normal: 1280 x 720 y fullscreen=false."
   },
 
   "vision": {
     "jpeg_calidad": 60,
-    "camara_ancho": 320,
-    "camara_alto": 240,
+    "camara_ancho": 640,
+    "camara_alto": 480,
+    "_nota_resolucion": "Resolución de TRABAJO: la Foscam entrega 1280x720 y el cliente la reescala a esto antes de comprimir. 640x480 es el mínimo con el que el QR se decodifica bien a ~40 cm; a 320x240 la mano se sigue detectando pero el QR falla. Si el QR cuesta, subí a 800x600 antes que tocar nada más.",
     "camara_fps": 15,
     "camara_index": 0,
-    "camara_url": "",
-    "_nota_camara_url": "Vacío = usa la webcam local (camara_index). Para usar el celular como cámara IP, poné aquí la URL del stream, ej: 'http://192.168.100.50:8080/video' (app IP Webcam en Android).",
+    "camara_modo": "snapshot",
+    "_nota_camara_modo": "'stream' = MJPEG continuo (videostream.cgi). 'snapshot' = pide una foto suelta (snapshot.cgi) N veces por segundo. En la FI8918W conviene 'snapshot': su MJPEG es de 2010 y OpenCV/FFMPEG a veces se le cuelga, mientras que el snapshot es un JPEG normal y si falla uno se pide el siguiente. 'stream' da más fps si te funciona bien.",
+    "camara_url": "http://192.168.50.10:80/videostream.cgi?user=admin&pwd=&resolution=32&rate=3",
+    "_nota_camara_url": "Vacío = webcam USB local (camara_index). Foscam FI8918W (MJPEG, NO tiene RTSP): 'http://IP:PUERTO/videostream.cgi?user=USUARIO&pwd=CLAVE&resolution=32&rate=3'. resolution: 32=640x480, 8=320x240. rate: 0=máx, 3=15fps, 6=10fps. Celular con IP Webcam: 'http://IP:8080/video'.",
+    "camara_snapshot_url": "http://192.168.50.10:80/snapshot.cgi?user=admin&pwd=&resolution=32",
+    "_nota_snapshot_url": "Se usa cuando camara_modo='snapshot'. Misma IP/puerto/credenciales que camara_url. Clave por defecto de fábrica de la FI8918W: usuario 'admin' y contraseña VACÍA (por eso 'pwd=' sin nada).",
+    "camara_rtsp_tcp": false,
+    "_nota_rtsp_tcp": "Dejar en false con la FI8918W (no habla RTSP). Poner true solo con cámaras H.264 modernas: fuerza RTSP sobre TCP para que el WiFi no rompa la imagen en bloques verdes.",
+    "camara_reintento_s": 3.0,
+    "_nota_reintento": "Si la cámara se cae, se reabre el stream cada N segundos en vez de quedarse colgada.",
     "mediapipe_confianza_deteccion": 0.70,
     "mediapipe_confianza_seguimiento": 0.50,
     "dedos_minimos_palma_abierta": 4,
@@ -23,12 +43,32 @@
     "_nota": "jpeg_calidad entre 40-70 es buen balance latencia/calidad en red local."
   },
 
+  "ptz": {
+    "activo": true,
+    "base_url": "http://192.168.50.10:80",
+    "usuario": "admin",
+    "clave": "",
+    "_nota": "Movimiento motorizado de la Foscam FI8918W (pan ~270°, tilt ~120°). Misma IP/puerto/credenciales que la cámara. Ponelo en false y la cámara queda fija, sin afectar a nada más.",
+    "timeout_s": 2.0,
+    "intervalo_min_s": 0.45,
+    "_nota_intervalo": "Tiempo mínimo entre órdenes de movimiento. Bajarlo de ~0.4 s satura la mecánica y la cámara se atasca a media pasada.",
+    "zona_muerta": 0.18,
+    "_nota_zona_muerta": "Fracción del encuadre alrededor del centro en la que NO se mueve. Si la bajás mucho, la cámara oscila sin parar persiguiendo el centro.",
+    "invertir_pan": false,
+    "invertir_tilt": false,
+    "_nota_invertir": "Si al seguir la mano la cámara se va para el lado contrario, poné en true el eje que corresponda.",
+    "seguir_vertical": true,
+    "patrulla_en_reposo": true,
+    "_nota_patrulla": "true = en reposo la cámara barre de lado a lado buscando clientes (modo atracción). Se detiene sola en cuanto detecta una mano y al leer el QR."
+  },
+
   "gpio_pi": {
     "_nota": "Numeración BCM (no física). Pull-up interno habilitado en todos.",
-    "boton_mas":    17,
-    "boton_menos":  27,
-    "boton_ok":     22,
-    "boton_del":    23
+    "_nota_pines": "OJO: se movieron los pines. El panel SPI 3.5\" ocupa GPIO 7-11 (SPI0) + 18/24/25, y muchos overlays usan GPIO 17 para el IRQ del táctil — que era el botón [+]. GPIO 14/15 quedan reservados para el UART del ESP32. Los pines de abajo (5, 6, 13, 26) no los toca ningún overlay de pantalla.",
+    "boton_mas":     5,
+    "boton_menos":   6,
+    "boton_ok":     13,
+    "boton_del":    26
   },
 
   "uart": {
@@ -90,15 +130,17 @@
 
   "base_de_datos": {
     "ruta": "robot_bipedo.db",
-    "_nota": "Ruta relativa al directorio desde donde se ejecutan los scripts de la PC."
+    "_nota": "Ruta relativa a la RAÍZ del repo (donde está este config.json), no al directorio desde el que ejecutás. Así la GUI, la API y el servidor de visión usan siempre el mismo archivo .db. También acepta ruta absoluta.",
+    "registrar_desde_zmq": false,
+    "_nota_registrar_desde_zmq": "false = la venta la registra SOLO la API cuando la Pi hace POST /api/transacciones (ya lleva la cédula real). En true se registraba también al decodificar el QR, y como ambos corren ahora en la misma Pi cada venta quedaba duplicada (y la segunda como fallida por el uso_unico del QR)."
   },
 
   "firebase": {
-    "activo": true,
+    "activo": false,
     "archivo_credenciales": "firebase_credentials.json",
     "coleccion_transacciones": "transacciones",
     "coleccion_clientes": "clientes",
-    "_nota_activar": "Poné activo=true cuando tengas el JSON de credenciales guardado en pc/. Mientras esté en false, el robot funciona solo con SQLite local.",
+    "_nota_activar": "Arranca en false a propósito: así el robot bootea sin internet (datos del celular apagados) usando solo SQLite. Poné true cuando tengas el JSON de credenciales en pc/ Y el hotspot encendido. Lo que no se suba queda pendiente y se sube después con 'python pc/sync_firebase.py'.",
     "_nota_credenciales": "Descargá el archivo desde: consola de Firebase -> Configuracion del proyecto -> Cuentas de servicio -> Generar nueva clave privada. Guardalo en pc/ con el nombre de arriba. NO lo subas a git (ya esta en .gitignore). Pasos detallados en pc/FIREBASE_SETUP.md."
   }
 }
