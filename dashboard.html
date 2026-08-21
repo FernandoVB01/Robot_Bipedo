@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="es" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel Administrativo</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #0f1115;
+            color: #a0aabf;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        /* Colores y acentos */
+        .text-neon { color: #00ff66 !important; }
+        .bg-dark-card { background-color: #1a1d24; border: 1px solid #2d313a; border-radius: 8px; }
+        .navbar { background-color: #15181e !important; border-bottom: 1px solid #2d313a; }
+        
+        /* Tarjetas de métricas */
+        .metric-card { padding: 1.5rem; height: 100%; }
+        .metric-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.5rem; color: #8b949e; }
+        .metric-value { font-size: 2.5rem; font-weight: bold; line-height: 1; margin-bottom: 0.25rem; }
+        .metric-sub { font-size: 0.75rem; color: #6e7681; }
+        
+        /* Pestañas */
+        .nav-tabs { border-bottom: 1px solid #2d313a; margin-bottom: 1.5rem; margin-top: 2rem; }
+        .nav-tabs .nav-link { color: #8b949e; border: none; padding: 1rem 1.5rem; background: transparent; }
+        .nav-tabs .nav-link:hover { color: #c9d1d9; border-bottom: 2px solid #4a505e; }
+        .nav-tabs .nav-link.active { color: #00ff66; border-bottom: 2px solid #00ff66; font-weight: bold; }
+        
+        /* Tablas */
+        .table-dark { --bs-table-bg: #1a1d24; --bs-table-striped-bg: #1f232b; }
+        th { font-size: 0.75rem; text-transform: uppercase; color: #8b949e !important; border-bottom: 2px solid #2d313a !important; }
+        td { font-size: 0.85rem; vertical-align: middle; border-bottom: 1px solid #2d313a !important; }
+        .badge-success { background-color: rgba(0, 255, 102, 0.1); color: #00ff66; border: 1px solid rgba(0, 255, 102, 0.2); }
+        
+        /* Controles */
+        .btn-update { background-color: #3b82f6; color: white; font-size: 0.85rem; font-weight: bold; border-radius: 6px; }
+        .btn-update:hover { background-color: #2563eb; color: white; }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <nav class="navbar px-4 py-3">
+        <div class="d-flex w-100 justify-content-between align-items-center">
+            <span class="fs-5 fw-bold text-neon">
+                🤖 Panel Administrativo
+            </span>
+            <span class="text-secondary" style="font-size: 0.8rem;">
+                <span style="color: #00ff66;">●</span> API conectada
+            </span>
+        </div>
+    </nav>
+
+    <div class="container-fluid px-4 py-4">
+        
+        <!-- Tarjetas Superiores -->
+        <div class="row g-3">
+            <div class="col-md-2">
+                <div class="bg-dark-card metric-card">
+                    <div class="metric-title">Clientes Registrados</div>
+                    <div class="metric-value text-neon" id="metric-clientes">0</div>
+                    <div class="metric-sub">cédulas únicas</div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="bg-dark-card metric-card">
+                    <div class="metric-title">Transacciones Hoy</div>
+                    <div class="metric-value text-neon" id="metric-trans">0</div>
+                    <div class="metric-sub">totales</div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="bg-dark-card metric-card">
+                    <div class="metric-title">Tasa de Éxito</div>
+                    <div class="metric-value text-neon">100%</div>
+                    <div class="metric-sub">QR válidos / total</div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="bg-dark-card metric-card">
+                    <div class="metric-title">Ingresos Totales</div>
+                    <div class="metric-value text-neon" id="metric-ingresos">$0.00</div>
+                    <div class="metric-sub">USD generados</div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="bg-dark-card metric-card">
+                    <div class="metric-title">Productos Activos</div>
+                    <div class="metric-value text-neon" id="metric-prods">3</div>
+                    <div class="metric-sub">QR disponibles</div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="bg-dark-card metric-card">
+                    <div class="metric-title">Frames Procesados</div>
+                    <div class="metric-value text-neon">30</div>
+                    <div class="metric-sub">fps promedio</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sistema de Pestañas -->
+        <ul class="nav nav-tabs" id="miDashboardTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="transacciones-tab" data-bs-toggle="tab" data-bs-target="#transacciones" type="button" role="tab">Transacciones</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="qrcodes-tab" data-bs-toggle="tab" data-bs-target="#qrcodes" type="button" role="tab">Gestor QR Codes</button>
+            </li>
+        </ul>
+
+        <!-- Contenido de Pestañas -->
+        <div class="tab-content" id="misPestañasContent">
+            
+            <!-- Pestaña 1: Transacciones (Como en la foto) -->
+            <div class="tab-pane fade show active" id="transacciones" role="tabpanel">
+                <div class="d-flex align-items-center mb-3">
+                    <button class="btn btn-update btn-sm px-3 py-2 me-3" onclick="cargarDatos()">↻ Actualizar</button>
+                    <span class="text-secondary" style="font-size: 0.8rem;">Auto-refresh cada 10 s</span>
+                </div>
+                
+                <div class="bg-dark-card overflow-hidden">
+                    <div class="table-responsive">
+                        <table class="table table-dark table-striped mb-0">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Timestamp</th>
+                                    <th>Cédula</th>
+                                    <th>Producto</th>
+                                    <th>Precio Base</th>
+                                    <th>Descuento</th>
+                                    <th>Total</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tabla-body">
+                                <!-- Datos de ejemplo estilo placeholder -->
+                                <tr>
+                                    <td>1</td>
+                                    <td>24/6/2026, 7:46:34 a. m.</td>
+                                    <td>1713175071</td>
+                                    <td>1</td>
+                                    <td class="text-neon">$1.50</td>
+                                    <td style="color: #ff6b6b;">20%</td>
+                                    <td class="text-neon">$1.20</td>
+                                    <td><span class="badge badge-success px-2 py-1">✓ Exitosa</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pestaña 2: Gestor de QRs (La nueva función) -->
+            <div class="tab-pane fade" id="qrcodes" role="tabpanel">
+                <div class="row">
+                    <!-- Formulario para crear QRs -->
+                    <div class="col-md-4">
+                        <div class="bg-dark-card p-4">
+                            <h6 class="text-white mb-4">Generar Nuevo QR de Descuento</h6>
+                            <form>
+                                <div class="mb-3">
+                                    <label class="form-label text-secondary" style="font-size: 0.8rem;">Nombre del Producto</label>
+                                    <input id="qr-nombre" type="text" class="form-control bg-dark text-white border-secondary" placeholder="Ej. Gaseosa">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label text-secondary" style="font-size: 0.8rem;">Porcentaje de Descuento</label>
+                                    <div class="input-group">
+                                        <input id="qr-descuento" type="number" class="form-control bg-dark text-white border-secondary" placeholder="20">
+                                        <span class="input-group-text bg-dark text-secondary border-secondary">%</span>
+                                    </div>
+                                </div>
+                                <div class="mb-4">
+                                    <label class="form-label text-secondary" style="font-size: 0.8rem;">Límite de usos</label>
+                                    <input id="qr-limite" type="number" class="form-control bg-dark text-white border-secondary" placeholder="100">
+                                </div>
+                                <button type="button" onclick="generarQR()" class="btn text-dark w-100 fw-bold" style="background-color: #00ff66;">Generar Código QR</button>
+                            </form>
+                        </div>
+                    </div>
+                    
+                    <!-- Lista de QRs Activos -->
+                    <div class="col-md-8">
+                        <div class="bg-dark-card p-4 h-100">
+                            <h6 class="text-white mb-4">QRs Activos en el Robot</h6>
+                            <div class="row g-3" id="qr-lista">
+                                <div class="col-12 text-secondary">Cargando…</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Scripts necesarios para las pestañas -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        async function cargarDatos() {
+            try {
+                // Conectamos a la base de datos de tu PC
+                const respuesta = await fetch('http://localhost:8000/api/encuestas');
+                const datos = await respuesta.json();
+                
+                // Actualizamos los números grandes de arriba
+                document.getElementById('metric-clientes').innerText = datos.length;
+                document.getElementById('metric-trans').innerText = datos.length;
+
+                const tablaBody = document.getElementById('tabla-body');
+                const tablaHead = document.querySelector('thead tr'); 
+                
+                // Borramos el dato falso
+                tablaBody.innerHTML = ''; 
+
+                if (datos.length > 0) {
+                    const cabeceras = Object.keys(datos[0]);
+                    
+                    // 1. Dibujar cabeceras reales de tu base de datos
+                    let headHTML = '<th>#</th>';
+                    cabeceras.forEach(col => {
+                        headHTML += `<th>${col.toUpperCase()}</th>`;
+                    });
+                    headHTML += '<th>ESTADO</th>';
+                    tablaHead.innerHTML = headHTML;
+                    
+                    // 2. Dibujar tus datos reales
+                    let bodyHTML = '';
+                    datos.forEach((fila, index) => {
+                        bodyHTML += '<tr>';
+                        bodyHTML += `<td>${index + 1}</td>`;
+                        
+                        cabeceras.forEach(col => {
+                            // Imprimimos la celda. Si es el dato de 'cedula', le ponemos color neón
+                            if(col.toLowerCase() === 'cedula') {
+                                bodyHTML += `<td class="text-neon">${fila[col]}</td>`;
+                            } else {
+                                bodyHTML += `<td>${fila[col]}</td>`;
+                            }
+                        });
+                        
+                        // Añadimos el badge de éxito al final de cada fila
+                        bodyHTML += `<td><span class="badge badge-success px-2 py-1">✓ Exitosa</span></td>`;
+                        bodyHTML += '</tr>';
+                    });
+                    
+                    tablaBody.innerHTML = bodyHTML;
+                } else {
+                    // Mensaje si la base de datos está vacía
+                    tablaBody.innerHTML = '<tr><td colspan="10" class="text-center text-secondary py-4">No hay transacciones registradas todavía.</td></tr>';
+                }
+            } catch (error) {
+                console.error("Error al conectar con la API:", error);
+            }
+        }
+
+        // ── Gestor de QR ──────────────────────────────────────────────────
+        const API = 'http://localhost:8000';   // si abrís el dashboard por Ngrok/otra IP, cambiá esto
+
+        async function generarQR(){
+            const nombre = document.getElementById('qr-nombre').value.trim();
+            const desc   = parseFloat(document.getElementById('qr-descuento').value);
+            const limite = parseInt(document.getElementById('qr-limite').value) || 0;
+            if(nombre.length < 2 || isNaN(desc)){ alert('Completá nombre y descuento.'); return; }
+            try{
+                const r = await fetch(API + '/api/qr/generar', {
+                    method:'POST', headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({nombre:nombre, descuento_pct:desc, limite_usos:limite})
+                });
+                if(!r.ok){ const e = await r.json().catch(()=>({})); throw new Error(e.detail || ('HTTP '+r.status)); }
+                const data = await r.json();
+                window.open(API + '/api/qr/imagen?texto=' + encodeURIComponent(data.codigo), '_blank');
+                document.getElementById('qr-nombre').value = '';
+                document.getElementById('qr-descuento').value = '';
+                document.getElementById('qr-limite').value = '';
+                cargarQRs();
+            }catch(err){ alert('No se pudo generar: ' + err.message); }
+        }
+
+        async function cargarQRs(){
+            const cont = document.getElementById('qr-lista');
+            if(!cont) return;
+            try{
+                const rows = await (await fetch(API + '/api/qr/activos')).json();
+                if(!rows.length){ cont.innerHTML = '<div class="col-12 text-secondary">Todavía no hay QR activos.</div>'; return; }
+                cont.innerHTML = rows.map(q => `
+                    <div class="col-md-6">
+                      <div class="p-3 border border-secondary rounded d-flex align-items-center justify-content-between" style="background-color:#1f232b;">
+                        <div>
+                          <div class="text-white fw-bold mb-1">${q.producto_nombre || '—'}</div>
+                          <div class="text-neon" style="font-size:1.2rem;">-${q.descuento_pct}%</div>
+                          <a href="${API}/api/qr/imagen?texto=${encodeURIComponent(q.codigo)}" target="_blank" class="small" style="color:#00ff66;">Ver / Imprimir QR</a>
+                        </div>
+                        <div class="text-end">
+                          <div class="text-secondary" style="font-size:0.75rem;">Usos: ${q.usos_actuales}/${q.usos_max || '∞'}</div>
+                          <button class="btn btn-sm btn-outline-danger mt-2" onclick="desactivarQR(${q.id})">Desactivar</button>
+                        </div>
+                      </div>
+                    </div>`).join('');
+            }catch(err){ cont.innerHTML = '<div class="col-12 text-danger">Error cargando QR: ' + err.message + '</div>'; }
+        }
+
+        async function desactivarQR(id){
+            try{ await fetch(API + '/api/qr/' + id + '/desactivar', {method:'POST'}); cargarQRs(); }
+            catch(err){ alert('No se pudo desactivar: ' + err.message); }
+        }
+
+        // Cargamos al abrir y programamos el auto-refresh cada 10 segundos
+        cargarDatos();
+        cargarQRs();
+        setInterval(() => { cargarDatos(); cargarQRs(); }, 10000);
+    </script>
+</body>
+</html>

@@ -35,8 +35,8 @@ import uvicorn
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -46,6 +46,7 @@ from pydantic import BaseModel, Field
 # ──────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent))
 from database import db
+from sesion import store as sesiones, Fase, validar_cedula
 
 # Firebase (espejo en la nube, opcional y resiliente)
 try:
@@ -126,6 +127,12 @@ class QRCreate(BaseModel):
     producto_id: int  = Field(..., gt=0, example=1)
     uso_unico:   bool = Field(False)
 
+class QRGenerar(BaseModel):
+    """Alta rápida desde el dashboard: crea el producto + su QR de descuento."""
+    nombre:        str = Field(..., min_length=2, max_length=120, example="Gaseosa")
+    descuento_pct: float = Field(..., ge=0, le=100, example=20)
+    limite_usos:   int = Field(0, ge=0, example=100, description="0 = ilimitado")
+
 class TransaccionManual(BaseModel):
     cedula:      str            = Field(..., min_length=10, max_length=10,
                                          example="1234567890")
@@ -144,6 +151,35 @@ class RegistrarVenta(BaseModel):
     qr_codigo: str = Field(..., example="PROD:Gaseosa 500ml|DESC:0.20|BASE:1.50")
 
 
+# ── Modelos del flujo nuevo: el celular como control ─────────────────────────
+
+class SesionCedula(BaseModel):
+    cedula: str = Field(..., min_length=10, max_length=10, example="1710034065")
+
+class SesionControl(BaseModel):
+    """Consigna del joystick. v = adelante/atrás, w = giro. Ambos en [-1, 1]."""
+    v: float = Field(0.0, ge=-1.0, le=1.0)
+    w: float = Field(0.0, ge=-1.0, le=1.0)
+
+class SesionAccion(BaseModel):
+    accion: str  = Field(..., example="BAILE")
+    datos:  dict = Field(default_factory=dict)
+
+class SesionProducto(BaseModel):
+    producto_id: int = Field(..., gt=0)
+
+class SesionFinalizar(BaseModel):
+    producto_id: Optional[int] = None
+
+
+class EncuestaCreate(BaseModel):
+    """Datos que el cliente carga desde su celular (estado 1: pulgar arriba)."""
+    nombre:   str = Field(..., min_length=2, max_length=120, example="Ana Pérez")
+    cedula:   str = Field(..., min_length=10, max_length=10, example="1710034065")
+    telefono: str = Field("", max_length=30, example="0991234567")
+    email:    str = Field("", max_length=160, example="ana@mail.com")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # RUTAS — Dashboard
 # ─────────────────────────────────────────────────────────────────────────────
@@ -157,6 +193,52 @@ async def dashboard():
         return FileResponse(str(html_path))
     return HTMLResponse(content="<h2>dashboard.html no encontrado en /static/</h2>",
                         status_code=404)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RUTAS — Encuesta (estado 1: el cliente carga sus datos desde el celular)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/encuesta", response_class=HTMLResponse, tags=["Encuesta"],
+         summary="Formulario de datos del cliente")
+async def servir_encuesta():
+    """Sirve el formulario que el cliente abre al escanear el QR del estado 1."""
+    html_path = STATIC_DIR / "encuesta.html"
+    if html_path.exists():
+        return FileResponse(str(html_path))
+    return HTMLResponse("<h2>encuesta.html no encontrado en pc/static/</h2>",
+                        status_code=404)
+
+
+@app.post("/api/encuesta", status_code=201, tags=["Encuesta"],
+          summary="Registrar los datos del cliente")
+async def registrar_encuesta(datos: EncuestaCreate):
+    """
+    Guarda los datos en SQLite (fuente de verdad, funciona SIN internet) y
+    devuelve un código para retirar la muestra. El espejo a Firebase se hace
+    después con sync_firebase.py, igual que las ventas.
+    """
+    ok, motivo = validar_cedula(datos.cedula)
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"Cédula inválida: {motivo}")
+
+    import random
+    codigo = "RM-" + "".join(
+        random.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(5))
+    reg = db.registrar_encuesta(
+        nombre   = datos.nombre.strip(),
+        cedula   = datos.cedula.strip(),
+        telefono = datos.telefono.strip(),
+        email    = datos.email.strip(),
+        codigo   = codigo,
+    )
+    return {"ok": True, "id": reg["id"], "codigo": codigo}
+
+
+@app.get("/api/encuestas", tags=["Encuesta"], summary="Listar encuestas cargadas")
+async def listar_encuestas(limit: int = Query(100, ge=1, le=500),
+                           offset: int = Query(0, ge=0)):
+    return db.get_encuestas(limit=limit, offset=offset)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -264,6 +346,73 @@ async def validar_qr(body: dict):
     return {"valido": resultado is not None, "qr": resultado}
 
 
+@app.post("/api/qr/generar", status_code=201, tags=["QR Codes"],
+          summary="Crear producto + QR de descuento (para el gestor del dashboard)")
+async def generar_qr(body: QRGenerar):
+    """
+    Un solo paso desde el dashboard: crea el producto con su descuento y le arma
+    un QR con límite de usos. Devuelve el código y la URL de su imagen.
+    """
+    prod = db.crear_producto(
+        nombre      = body.nombre.strip(),
+        precio_base = 0.0,                       # promo de descuento, sin precio base
+        descuento   = round(body.descuento_pct / 100.0, 4),
+        activo      = True,
+    )
+    codigo = f"PROMO:{body.nombre.strip()}|DESC:{int(body.descuento_pct)}|ID:{prod['id']}"
+    qr = db.crear_qr(codigo=codigo, producto_id=prod["id"],
+                     uso_unico=False, usos_max=int(body.limite_usos))
+    if not qr:
+        raise HTTPException(400, "No se pudo crear el QR.")
+    return {"ok": True, "id": qr["id"], "codigo": codigo,
+            "imagen_url": f"/api/qr/imagen?texto={codigo}"}
+
+
+@app.get("/api/qr/activos", tags=["QR Codes"],
+         summary="QR activos con nombre y descuento del producto")
+async def qr_activos(limit: int = Query(100, ge=1, le=500)):
+    return db.get_qr_activos_detallado(limit=limit)
+
+
+@app.get("/api/qr/promo", tags=["QR Codes"],
+         summary="El robot lee un QR y recibe su promo (consume un uso)")
+async def qr_promo(codigo: str = Query(..., min_length=1)):
+    r = db.consumir_qr_promo(codigo)
+    return r if r is not None else {"valido": False}
+
+
+@app.post("/api/qr/{qr_id}/desactivar", tags=["QR Codes"],
+          summary="Desactivar un QR")
+async def desactivar_qr(qr_id: int):
+    if not db.desactivar_qr(qr_id):
+        raise HTTPException(404, f"QR {qr_id} no encontrado.")
+    return {"ok": True, "id": qr_id}
+
+
+@app.get("/api/qr/imagen", tags=["QR Codes"],
+         summary="Imagen SVG de un QR para mostrar o imprimir")
+async def imagen_qr(texto: str = Query(..., min_length=1)):
+    """
+    Devuelve el QR de 'texto' como imagen SVG (crece sin pixelarse al imprimir y
+    NO necesita Pillow). Se usa desde el dashboard: <img src=".../api/qr/imagen?texto=...">.
+    """
+    try:
+        import io
+        import qrcode
+        import qrcode.image.svg
+    except ImportError:
+        raise HTTPException(501, "Falta la librería qrcode en la PC: pip install qrcode")
+
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M,
+                       box_size=10, border=4)
+    qr.add_data(texto)
+    qr.make(fit=True)
+    img = qr.make_image(image_factory=qrcode.image.svg.SvgPathImage)
+    buf = io.BytesIO()
+    img.save(buf)
+    return Response(content=buf.getvalue(), media_type="image/svg+xml")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # RUTAS — Transacciones
 # ─────────────────────────────────────────────────────────────────────────────
@@ -345,6 +494,177 @@ async def set_cedula_activa(body: CedulaActiva):
         set_active_cedula(body.cedula)
         return {"ok": True, "cedula": body.cedula}
     return {"ok": False, "info": "Servidor ZeroMQ en proceso separado — no aplica."}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RUTAS — SESIÓN INTERACTIVA (el celular del cliente como control)
+#
+# Este bloque es "la base de datos" que consulta el robot. El celular escribe
+# acá; la Raspberry lee acá 20 veces por segundo. Todo pasa por el hotspot, sin
+# salir a internet: por eso el robot responde al instante cuando el cliente
+# suelta el acelerador.
+#
+# Flujo:
+#   Pi     → POST /api/sesion/nueva          → dibuja el QR con la URL devuelta
+#   Celular→ GET  /c/{token}                 → abre la WebApp
+#   Celular→ POST /api/sesion/{token}/cedula → valida Módulo 10, gana el control
+#   Celular→ POST /api/sesion/{token}/control (joystick, ~10 Hz)
+#   Pi     → GET  /api/sesion/{token}/estado (20 Hz)
+#   Celular→ POST /api/sesion/{token}/finalizar → registra la venta, libera todo
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/api/sesion/nueva", tags=["Sesión"],
+          summary="Abrir una sesión y obtener la URL para el QR (la llama la Pi)")
+async def sesion_nueva(request: Request):
+    """
+    La URL se arma con el Host con el que la Pi llegó hasta acá, no con una IP
+    de configuración. Es a propósito: la IP de la PC en el hotspot cambia cada
+    vez que se reinicia, y así el QR apunta siempre a una dirección que ya se
+    demostró alcanzable — la que la Pi acaba de usar para pedir la sesión.
+    """
+    s = sesiones.crear()
+    host = request.headers.get("host") or f"localhost:{API_PORT}"
+    url  = f"{request.url.scheme}://{host}/c/{s.token}"
+    print(f"[SESION] Nueva sesión {s.token} → {url}")
+    return {"token": s.token, "url": url, "seq": s.seq, "fase": s.fase}
+
+
+@app.get("/c/{token}", response_class=HTMLResponse, tags=["Sesión"],
+         summary="WebApp del cliente (la abre el celular al escanear el QR)")
+async def sesion_webapp(token: str):
+    """
+    Sirve la WebApp. El token va en la ruta y el JavaScript lo saca de ahí.
+
+    La página es 100% autocontenida (sin CDN, sin fuentes ni scripts externos)
+    porque el celular está en un hotspot que normalmente NO tiene internet.
+    """
+    html_path = STATIC_DIR / "control.html"
+    if not html_path.exists():
+        return HTMLResponse("<h2>control.html no encontrado en pc/static/</h2>",
+                            status_code=404)
+    sesiones.marcar_conectado(token)
+    return FileResponse(str(html_path))
+
+
+@app.get("/api/sesion/{token}", tags=["Sesión"],
+         summary="Estado de la sesión (lo consulta el celular)")
+async def sesion_ver(token: str):
+    s = sesiones.obtener(token)
+    if not s:
+        raise HTTPException(404, "Sesión no encontrada o vencida.")
+    d = s.a_dict()
+    if s.producto_id:
+        d["producto"] = db.get_producto_by_id(s.producto_id)
+    return d
+
+
+@app.post("/api/sesion/{token}/cedula", tags=["Sesión"],
+          summary="El cliente ingresa su cédula desde el celular")
+async def sesion_cedula(token: str, body: SesionCedula):
+    ok, motivo, s = sesiones.set_cedula(token, body.cedula)
+    if s is None:
+        raise HTTPException(404, motivo)
+    if not ok:
+        # 200 con ok=False a propósito: es un error de dedo del cliente, no un
+        # fallo del sistema. La WebApp muestra el motivo y lo deja reintentar.
+        return {"ok": False, "motivo": motivo}
+
+    # Se le avisa también al servidor de visión, que ya tenía este mecanismo.
+    if ZMQSERVER_IMPORTED:
+        set_active_cedula(body.cedula)
+
+    print(f"[SESION] {token}: cédula validada.")
+    return {"ok": True, "fase": s.fase, "seq": s.seq}
+
+
+@app.post("/api/sesion/{token}/control", tags=["Sesión"],
+          summary="Joystick: consigna de movimiento (la manda el celular ~10 Hz)")
+async def sesion_control(token: str, body: SesionControl):
+    if not sesiones.set_control(token, body.v, body.w):
+        raise HTTPException(409, "La sesión no está habilitada para manejar.")
+    return {"ok": True}
+
+
+@app.post("/api/sesion/{token}/accion", tags=["Sesión"],
+          summary="Acción discreta desde el celular (BAILE, SALUDO, ...)")
+async def sesion_accion(token: str, body: SesionAccion):
+    if not sesiones.push_accion(token, body.accion.upper(), body.datos):
+        raise HTTPException(409, "La sesión no acepta acciones en este momento.")
+    return {"ok": True}
+
+
+@app.post("/api/sesion/{token}/producto", tags=["Sesión"],
+          summary="El cliente elige un producto del catálogo")
+async def sesion_producto(token: str, body: SesionProducto):
+    prod = db.get_producto_by_id(body.producto_id)
+    if not prod:
+        raise HTTPException(404, "Producto no encontrado.")
+    if not sesiones.set_producto(token, body.producto_id):
+        raise HTTPException(409, "La sesión no está habilitada.")
+    return {"ok": True, "producto": prod}
+
+
+@app.post("/api/sesion/{token}/finalizar", tags=["Sesión"],
+          summary="Cierra la compra, la registra y libera el control del robot")
+async def sesion_finalizar(token: str, body: SesionFinalizar):
+    s = sesiones.obtener(token)
+    if not s:
+        raise HTTPException(404, "Sesión no encontrada o vencida.")
+    if not s.cedula:
+        raise HTTPException(400, "La sesión no tiene una cédula validada.")
+
+    producto_id = body.producto_id or s.producto_id
+    if not producto_id:
+        raise HTTPException(400, "No se eligió ningún producto.")
+
+    prod = db.get_producto_by_id(producto_id)
+    if not prod:
+        raise HTTPException(404, "Producto no encontrado.")
+
+    # El QR impreso no interviene en este flujo: el producto se elige en el
+    # celular. Se deja marcado el origen para poder distinguir en el dashboard
+    # las ventas hechas por la WebApp de las del QR de papel.
+    t = db.registrar_transaccion(
+        cedula      = s.cedula,
+        qr_codigo   = f"WEBAPP:{producto_id}",
+        producto_id = producto_id,
+        precio_base = prod["precio_base"],
+        descuento   = prod["descuento"],
+        exito       = True,
+    )
+    _mirror_a_firebase(t)
+    sesiones.finalizar(token, t, mensaje="¡Gracias por tu compra!")
+    print(f"[SESION] {token}: venta registrada "
+          f"(cédula={s.cedula} producto={prod['nombre']}).")
+
+    return {"ok": True, "transaccion": t, "producto": prod}
+
+
+@app.post("/api/sesion/{token}/cancelar", tags=["Sesión"],
+          summary="El cliente se va sin comprar")
+async def sesion_cancelar(token: str):
+    s = sesiones.cancelar(token, "El cliente cerró la sesión.")
+    if not s:
+        raise HTTPException(404, "Sesión no encontrada.")
+    return {"ok": True, "fase": s.fase}
+
+
+@app.get("/api/sesion/{token}/estado", tags=["Sesión"],
+         summary="Lo que consulta la Raspberry 20 veces por segundo")
+async def sesion_estado(token: str, since: int = Query(-1)):
+    """
+    `since` es el último `seq` que vio la Pi. La respuesta trae `cambio=true`
+    solo si algo se movió, y en ese caso también las acciones pendientes — que
+    se entregan UNA sola vez.
+
+    El bloque `control` viene siempre, cambie o no `seq`: el joystick se
+    actualiza diez veces por segundo y no tendría sentido que cada movimiento
+    del dedo contara como "un cambio".
+    """
+    d = sesiones.estado(token, desde_seq=since)
+    if d is None:
+        raise HTTPException(404, "Sesión no encontrada o vencida.")
+    return d
 
 
 # ─────────────────────────────────────────────────────────────────────────────

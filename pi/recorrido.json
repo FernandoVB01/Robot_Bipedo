@@ -1,0 +1,14 @@
+{
+  "_nota": "Recorrido por pasos. Con ODOMETRÍA (exacto): avanzar_cm (cm), girar_grados (grados, + o -). Por TIEMPO (si no calibraste): avanzar/atras/girar_izq/girar_der/curva_izq/curva_der con seg. Otros: esperar (seg), frenar, mas_rapido, mas_lento. OJO: para odometría, el firmware tiene que estar calibrado (CUENTAS_POR_MM y VIA_MM).",
+  "pasos": [
+    {"accion": "avanzar_cm",   "cm": 100},
+    {"accion": "girar_grados", "grados": 90},
+    {"accion": "avanzar_cm",   "cm": 100},
+    {"accion": "girar_grados", "grados": 90},
+    {"accion": "avanzar_cm",   "cm": 100},
+    {"accion": "girar_grados", "grados": 90},
+    {"accion": "avanzar_cm",   "cm": 100},
+    {"accion": "girar_grados", "grados": 90},
+    {"accion": "esperar",      "seg": 1.0}
+  ]
+}

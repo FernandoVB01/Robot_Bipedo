@@ -1,0 +1,27 @@
+# Dependencias de la PC (el "servidor": visión + base de datos + WebApp)
+#
+#   pip install -r requirements-pc.txt
+#
+# La PC es la que corre los modelos de IA, guarda las ventas y sirve la WebApp
+# que abre el celular del cliente. Se levanta con:  py robot_server.py  (desde pc/)
+
+# --- Servidor web: API, dashboard y WebApp del celular ---
+fastapi
+uvicorn
+pydantic
+
+# --- Base de datos local (fuente de verdad) ---
+SQLAlchemy
+
+# --- Enlace con la Raspberry (frames de la cámara) ---
+pyzmq
+
+# --- Visión por computadora ---
+opencv-python
+mediapipe
+numpy
+
+# --- Espejo en la nube (OPCIONAL) ---
+# Solo hace falta si vas a activar firebase.activo=true en config.json.
+# Sin esto el robot funciona igual: guarda en SQLite y sincroniza después.
+firebase-admin

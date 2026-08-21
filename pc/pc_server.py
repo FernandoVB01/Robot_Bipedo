@@ -62,6 +62,8 @@ PALM_MIN_FINGERS         = _V.get("dedos_minimos_palma_abierta", 4)
 MP_DETECTION_CONFIDENCE  = _V.get("mediapipe_confianza_deteccion", 0.70)
 MP_TRACKING_CONFIDENCE   = _V.get("mediapipe_confianza_seguimiento", 0.50)
 QR_SECOND_PASS_OTSU      = _V.get("qr_segunda_pasada_otsu", True)
+PERSONA_ACTIVA           = _V.get("persona_activa", True)
+PERSONA_CONFIANZA        = _V.get("persona_confianza", 0.45)
 
 # ──────────────────────────────────────────────
 # BASE DE DATOS (importación diferida para
@@ -127,6 +129,59 @@ _hands_detector = mp_vision.HandLandmarker.create_from_options(_hand_opts)
 _FINGER_TIP = [8,  12, 16, 20]
 _FINGER_PIP = [6,  10, 14, 18]
 
+# ──────────────────────────────────────────────
+# MEDIAPIPE — Detección de PERSONAS (silueta completa)
+#
+# Antes el robot solo sabía reconocer una MANO: el cliente tenía que acercarse y
+# saludar. Para que el robot vaya él hacia la persona hace falta detectar el
+# cuerpo entero y, sobre todo, saber DÓNDE está y CUÁN LEJOS.
+#
+# Se usa EfficientDet-Lite0 (detector de objetos) filtrando la clase "person",
+# en vez de Pose Landmarker, porque lo que necesita el lazo de acercamiento es
+# justamente un RECUADRO:
+#   · el centro horizontal del recuadro → hacia dónde girar
+#   · la altura del recuadro            → a qué distancia está
+# Los 33 puntos del esqueleto que daría Pose no aportan nada a eso y cuestan más.
+# ──────────────────────────────────────────────
+_MODELO_PERSONA      = Path(__file__).parent / "efficientdet_lite0.tflite"
+_MODELO_PERSONA_URL  = ("https://storage.googleapis.com/mediapipe-models/"
+                        "object_detector/efficientdet_lite0/float32/1/"
+                        "efficientdet_lite0.tflite")
+
+_detector_persona = None
+
+def _init_detector_persona():
+    """
+    Prepara el detector de personas. Si algo falla (sin internet la primera vez,
+    modelo corrupto), NO tumba el servidor: el robot sigue funcionando con el
+    disparo por gesto de mano de siempre.
+    """
+    global _detector_persona
+    if not PERSONA_ACTIVA:
+        print("[PC-SERVER] Detección de personas desactivada por configuración.")
+        return
+    try:
+        if not _MODELO_PERSONA.exists():
+            print("[PC-SERVER] Descargando modelo de personas (~14 MB)…")
+            urllib.request.urlretrieve(_MODELO_PERSONA_URL, _MODELO_PERSONA)
+            print(f"[PC-SERVER] Modelo guardado en {_MODELO_PERSONA}")
+
+        _detector_persona = mp_vision.ObjectDetector.create_from_options(
+            mp_vision.ObjectDetectorOptions(
+                base_options       = mp_tasks.BaseOptions(
+                                        model_asset_path=str(_MODELO_PERSONA)),
+                max_results        = 5,
+                score_threshold    = PERSONA_CONFIANZA,
+                category_allowlist = ["person"],
+            ))
+        print("[PC-SERVER] Detector de personas listo.")
+    except Exception as exc:   # noqa: BLE001 — nunca debe tumbar el servidor
+        _detector_persona = None
+        print(f"[PC-SERVER] WARN: sin detección de personas — {exc}")
+        print("[PC-SERVER]       El robot seguirá disparando con el gesto de mano.")
+
+_init_detector_persona()
+
 # Landmarks del pulgar
 _THUMB_TIP = 4   # Punta del pulgar
 _THUMB_IP  = 3   # Articulación IP
@@ -144,6 +199,7 @@ stats_lock = threading.Lock()
 live_stats = {
     "frames_procesados": 0,
     "detecciones_mano":  0,
+    "personas_detectadas": 0,
     "pulgares_arriba":   0,
     "qr_decodificados":  0,
     "errores":           0,
@@ -234,13 +290,64 @@ def analizar_mano(frame: np.ndarray) -> dict:
     return salida
 
 
+def analizar_persona(frame: np.ndarray) -> dict:
+    """
+    Busca personas en el frame y devuelve la MÁS GRANDE (la más cercana).
+
+    Devuelve:
+      detectada — bool
+      x         — centro horizontal del recuadro, normalizado 0.0-1.0.
+                  0.5 = justo enfrente. La Pi lo usa para saber hacia qué lado
+                  girar mientras se acerca.
+      alto      — altura del recuadro como fracción del encuadre (0.0-1.0).
+                  Es el indicador de DISTANCIA: cuanto más cerca está la
+                  persona, más alto se ve. No son metros, y no hace falta que lo
+                  sean — se calibra una vez parándose a la distancia deseada y
+                  anotando el valor (la Pi lo va imprimiendo).
+      score     — confianza del detector
+
+    Si hay varias personas se elige la de mayor área: es la que está más cerca,
+    o sea a la que el robot le tiene que hablar.
+    """
+    salida = {"detectada": False, "x": None, "y": None,
+              "alto": None, "score": None}
+    if _detector_persona is None:
+        return salida
+
+    alto_img, ancho_img = frame.shape[:2]
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    resultado = _detector_persona.detect(mp_image)
+
+    if not resultado.detections:
+        return salida
+
+    mejor = max(resultado.detections,
+                key=lambda d: d.bounding_box.width * d.bounding_box.height)
+    bb = mejor.bounding_box
+
+    salida["detectada"] = True
+    salida["x"]     = float((bb.origin_x + bb.width / 2.0) / ancho_img)
+    # Para apuntar la cámara motorizada interesa la CARA, no el centro del
+    # cuerpo: se toma el tercio superior del recuadro. Si se usara el centro,
+    # la Foscam terminaría enfocando el ombligo del cliente.
+    salida["y"]     = float((bb.origin_y + bb.height * 0.28) / alto_img)
+    salida["alto"]  = float(bb.height / alto_img)
+    salida["score"] = float(mejor.categories[0].score) if mejor.categories else None
+    return salida
+
+
 def decode_qr(frame: np.ndarray) -> str | None:
     """
     Intenta decodificar un QR en el frame.
     Primera pasada: imagen en color.
     Segunda pasada: escala de grises + umbral Otsu (mejora QRs con bajo contraste).
     """
-    data, _, _ = _qr_detector.detectAndDecode(frame)
+    try:
+        data, _, _ = _qr_detector.detectAndDecode(frame)
+    except Exception:
+        data = ""
+        
     if data:
         return data
 
@@ -377,10 +484,26 @@ def run_server():
             _inc("frames_procesados")
             response: dict = {"hand_detected": False, "thumbs_up": False,
                                "hand_x": None, "hand_y": None,
+                               "persona_detectada": False, "persona_x": None,
+                               "persona_y": None, "persona_alto": None,
+                               "persona_score": None,
                                "qr_data": None, "error": None}
 
             # ── 3. Procesar según modo ────────────────────────────────────
-            if mode in ("HAND", "BOTH"):
+            # Los modos NO se acumulan por casualidad: cada red que se corre
+            # cuesta fps. En reposo la Pi pide solo PERSONA (buscar clientes);
+            # ya frente a alguien pide TODO; y durante la lectura del QR, solo QR.
+            if mode in ("PERSONA", "TODO"):
+                p = analizar_persona(frame)
+                response["persona_detectada"] = p["detectada"]
+                response["persona_x"]         = p["x"]
+                response["persona_y"]         = p["y"]
+                response["persona_alto"]      = p["alto"]
+                response["persona_score"]     = p["score"]
+                if p["detectada"]:
+                    _inc("personas_detectadas")
+
+            if mode in ("HAND", "BOTH", "TODO"):
                 # Palma abierta (STOP), pulgar arriba (INTERACCIÓN) y posición
                 # de la mano (para apuntar la cámara motorizada), de una pasada.
                 m = analizar_mano(frame)
@@ -391,7 +514,7 @@ def run_server():
                 if m["palma"]:  _inc("detecciones_mano")
                 if m["pulgar"]: _inc("pulgares_arriba")
 
-            if mode in ("QR", "BOTH"):
+            if mode in ("QR", "BOTH", "TODO"):
                 qr = decode_qr(frame)
                 response["qr_data"] = qr
                 if qr:
@@ -406,6 +529,7 @@ def run_server():
                 s = get_live_stats()
                 print(f"[PC-SERVER] frames={s['frames_procesados']} "
                       f"fps={s['fps_promedio']} "
+                      f"personas={s['personas_detectadas']} "
                       f"manos={s['detecciones_mano']} "
                       f"qrs={s['qr_decodificados']}")
 

@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0a081c">
+<title>Robot Pingüino</title>
+<!--
+  =============================================================================
+  WebApp del cliente — se abre al escanear el QR de la pantalla del robot.
+  =============================================================================
+  TODO va acá adentro: nada de CDN, ni fuentes de Google, ni librerías externas.
+  No es purismo: el celular está conectado al hotspot y ese hotspot NO tiene
+  internet. Cualquier <script src="https://..."> dejaría la página en blanco
+  justo en la demo.
+
+  Paleta igual a la de la pantalla del robot (pi_gui_gpio.py → class C), para
+  que el teléfono y el pingüino se vean como un mismo producto.
+  =============================================================================
+-->
+<style>
+  :root{
+    --bg:#0a081c; --bg2:#141032; --card:#1c1641; --card2:#262055;
+    --naranja:#ff5f32; --teal:#3cd2be; --oro:#ffd232; --verde:#32d282;
+    --blanco:#fff; --gris:#a09bc3; --tenue:#504b73;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    margin:0; background:radial-gradient(circle at 50% 0%,var(--bg2),var(--bg) 70%);
+    color:var(--blanco); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    display:flex; flex-direction:column; overflow:hidden;
+    /* Sin esto, arrastrar el joystick hace scroll de la página en iOS. */
+    touch-action:none; -webkit-user-select:none; user-select:none;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  .pantalla{flex:1; display:none; flex-direction:column; padding:18px; overflow-y:auto}
+  .pantalla.activa{display:flex}
+
+  header{text-align:center; padding:8px 0 4px}
+  .ping{font-size:52px; line-height:1}
+  h1{font-size:20px; margin:6px 0 2px; font-weight:700}
+  .sub{color:var(--gris); font-size:13px; margin:0}
+
+  .tarjeta{background:var(--card); border-radius:16px; padding:16px; margin:12px 0}
+
+  input[type=tel]{
+    width:100%; padding:16px; font-size:26px; text-align:center; letter-spacing:4px;
+    border-radius:14px; border:2px solid var(--tenue); background:var(--bg2);
+    color:var(--blanco); font-variant-numeric:tabular-nums;
+  }
+  input[type=tel]:focus{outline:none; border-color:var(--teal)}
+
+  button{
+    font:inherit; font-weight:700; border:none; border-radius:14px;
+    padding:16px; width:100%; background:var(--naranja); color:#fff; font-size:17px;
+  }
+  button:active{transform:scale(.97)}
+  button:disabled{background:var(--tenue); color:var(--gris)}
+  button.sec{background:var(--card2); color:var(--blanco)}
+  button.ok{background:var(--verde); color:#06231a}
+
+  .aviso{min-height:22px; font-size:14px; text-align:center; margin-top:10px; color:var(--oro)}
+
+  /* ── Joystick ───────────────────────────────────────────────────────── */
+  .zona-joy{display:flex; justify-content:center; align-items:center; padding:6px 0}
+  #pad{
+    position:relative; width:210px; height:210px; border-radius:50%;
+    background:radial-gradient(circle,var(--card2),var(--card));
+    border:2px solid var(--tenue); touch-action:none;
+  }
+  #pad::before,#pad::after{
+    content:""; position:absolute; background:var(--tenue); opacity:.5;
+  }
+  #pad::before{left:50%; top:14%; bottom:14%; width:1px; transform:translateX(-50%)}
+  #pad::after{top:50%; left:14%; right:14%; height:1px; transform:translateY(-50%)}
+  #knob{
+    position:absolute; width:78px; height:78px; border-radius:50%;
+    left:50%; top:50%; transform:translate(-50%,-50%);
+    background:linear-gradient(160deg,var(--teal),#1c8f80);
+    box-shadow:0 6px 20px rgba(60,210,190,.35); display:grid; place-items:center;
+    font-size:30px;
+  }
+  .lectura{text-align:center; color:var(--gris); font-size:12px;
+           font-variant-numeric:tabular-nums; margin-top:4px}
+
+  .fila{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px}
+  .fila3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:10px}
+
+  /* ── Catálogo ───────────────────────────────────────────────────────── */
+  .prod{
+    display:flex; justify-content:space-between; align-items:center;
+    background:var(--card); border:2px solid transparent; border-radius:14px;
+    padding:14px; margin-bottom:10px;
+  }
+  .prod.sel{border-color:var(--teal); background:var(--card2)}
+  .prod .n{font-weight:700; font-size:15px}
+  .prod .d{color:var(--oro); font-size:12px; margin-top:2px}
+  .prod .p{text-align:right; white-space:nowrap}
+  .prod .p .viejo{color:var(--tenue); text-decoration:line-through; font-size:12px}
+  .prod .p .nuevo{font-size:19px; font-weight:800; color:var(--teal)}
+
+  .tabs{display:flex; gap:8px; margin:4px 0 12px}
+  .tab{flex:1; text-align:center; padding:11px; border-radius:12px;
+       background:var(--card); color:var(--gris); font-weight:700; font-size:14px}
+  .tab.act{background:var(--naranja); color:#fff}
+
+  .estado{
+    position:fixed; top:0; left:0; right:0; text-align:center; font-size:11px;
+    padding:3px; background:#7a1010; color:#fff; display:none; z-index:9;
+  }
+  .estado.ver{display:block}
+  .grande{font-size:40px; text-align:center; margin:18px 0}
+</style>
+</head>
+<body>
+
+<div class="estado" id="estado-red">Sin conexión con el robot…</div>
+
+<!-- ── 1. CÉDULA ────────────────────────────────────────────────────────── -->
+<section class="pantalla activa" id="p-cedula">
+  <header>
+    <div class="ping">🐧</div>
+    <h1>¡Hola! Soy Pingüi</h1>
+    <p class="sub">Ingresá tu cédula para empezar</p>
+  </header>
+  <div class="tarjeta">
+    <input type="tel" id="cedula" inputmode="numeric" maxlength="10"
+           placeholder="0000000000" autocomplete="off">
+    <div class="aviso" id="aviso-cedula"></div>
+    <button id="btn-cedula" disabled>Continuar</button>
+  </div>
+  <p class="sub" style="text-align:center">
+    Tu cédula se usa solo para registrar la promoción.
+  </p>
+</section>
+
+<!-- ── 2. CONTROL ───────────────────────────────────────────────────────── -->
+<section class="pantalla" id="p-control">
+  <div class="tabs">
+    <div class="tab act" id="tab-manejar">Manejar</div>
+    <div class="tab" id="tab-comprar">Comprar</div>
+  </div>
+
+  <!-- 2a. Manejar -->
+  <div id="vista-manejar">
+    <div class="zona-joy">
+      <div id="pad"><div id="knob">🐧</div></div>
+    </div>
+    <div class="lectura" id="lectura">avance 0.00 · giro 0.00</div>
+
+    <div class="fila">
+      <button class="sec" data-accion="GIRO_IZQ">↺ 90° izq.</button>
+      <button class="sec" data-accion="GIRO_DER">↻ 90° der.</button>
+    </div>
+    <div class="fila3">
+      <button class="sec" data-accion="PIVOTE_IZQ">⤺ Curva</button>
+      <button class="sec" data-accion="BAILE">🕺 ¡Bailá!</button>
+      <button class="sec" data-accion="PIVOTE_DER">⤻ Curva</button>
+    </div>
+  </div>
+
+  <!-- 2b. Comprar -->
+  <div id="vista-comprar" style="display:none">
+    <div id="catalogo"></div>
+    <button id="btn-comprar" disabled>Elegí un producto</button>
+  </div>
+
+  <div class="aviso" id="aviso-control"></div>
+</section>
+
+<!-- ── 3. GRACIAS ───────────────────────────────────────────────────────── -->
+<section class="pantalla" id="p-gracias">
+  <header>
+    <div class="ping">🐧</div>
+    <h1>¡Gracias por tu compra!</h1>
+  </header>
+  <div class="tarjeta" id="recibo"></div>
+  <p class="sub" style="text-align:center">Ya podés guardar el teléfono. ¡Hasta la próxima!</p>
+</section>
+
+<!-- ── 4. FIN / ERROR ───────────────────────────────────────────────────── -->
+<section class="pantalla" id="p-fin">
+  <header>
+    <div class="grande" id="fin-icono">😴</div>
+    <h1 id="fin-titulo">La sesión se cerró</h1>
+    <p class="sub" id="fin-texto">Volvé a escanear el código QR de la pantalla del robot.</p>
+  </header>
+</section>
+
+<script>
+"use strict";
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   El token sale de la propia URL:  http://192.168.x.x:8000/c/<token>
+   ═══════════════════════════════════════════════════════════════════════════ */
+const TOKEN = location.pathname.split("/").filter(Boolean).pop() || "";
+const API   = "/api/sesion/" + encodeURIComponent(TOKEN);
+
+const $ = (id) => document.getElementById(id);
+
+/* Estado de la app */
+let fase        = "esperando";
+let productos   = [];
+let elegido     = null;
+let fallosRed   = 0;
+
+/* Consigna del joystick */
+let v = 0, w = 0;
+let ultimoV = 0, ultimoW = 0;
+
+/* ── Utilidades de red ─────────────────────────────────────────────────── */
+
+async function post(ruta, cuerpo) {
+  const r = await fetch(API + ruta, {
+    method:  "POST",
+    headers: {"Content-Type": "application/json"},
+    body:    JSON.stringify(cuerpo || {}),
+  });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+function marcarRed(ok) {
+  fallosRed = ok ? 0 : fallosRed + 1;
+  $("estado-red").classList.toggle("ver", fallosRed >= 3);
+}
+
+function mostrar(idPantalla) {
+  document.querySelectorAll(".pantalla")
+          .forEach(s => s.classList.toggle("activa", s.id === idPantalla));
+}
+
+/* ── 1. Cédula ─────────────────────────────────────────────────────────── */
+
+const inpCedula = $("cedula");
+const btnCedula = $("btn-cedula");
+
+inpCedula.addEventListener("input", () => {
+  inpCedula.value = inpCedula.value.replace(/\D/g, "").slice(0, 10);
+  btnCedula.disabled = inpCedula.value.length !== 10;
+  $("aviso-cedula").textContent = "";
+});
+
+btnCedula.addEventListener("click", async () => {
+  btnCedula.disabled = true;
+  $("aviso-cedula").textContent = "Verificando…";
+  try {
+    const r = await post("/cedula", {cedula: inpCedula.value});
+    if (r.ok) {
+      fase = "validada";
+      await cargarCatalogo();
+      mostrar("p-control");
+      inpCedula.blur();
+    } else {
+      /* Error de dedo del cliente: se muestra el motivo y se deja reintentar. */
+      $("aviso-cedula").textContent = r.motivo || "Cédula inválida.";
+      btnCedula.disabled = false;
+    }
+  } catch (e) {
+    $("aviso-cedula").textContent = "No se pudo conectar con el robot.";
+    btnCedula.disabled = false;
+  }
+});
+
+/* ── 2. Joystick ───────────────────────────────────────────────────────── */
+
+const pad  = $("pad");
+const knob = $("knob");
+let  arrastrando = false;
+const RADIO = 66;              // cuánto se puede alejar el knob del centro
+
+function moverKnob(px, py) {
+  knob.style.left = (105 + px) + "px";
+  knob.style.top  = (105 + py) + "px";
+}
+
+function desdeEvento(ev) {
+  const r = pad.getBoundingClientRect();
+  const t = ev.touches ? ev.touches[0] : ev;
+  let dx = t.clientX - (r.left + r.width  / 2);
+  let dy = t.clientY - (r.top  + r.height / 2);
+
+  const d = Math.hypot(dx, dy);
+  if (d > RADIO) { dx = dx / d * RADIO; dy = dy / d * RADIO; }
+
+  moverKnob(dx, dy);
+  /* Arriba en la pantalla = adelante en el robot, por eso el signo menos. */
+  v = +(-dy / RADIO).toFixed(2);
+  w = +( dx / RADIO).toFixed(2);
+  $("lectura").textContent = `avance ${v.toFixed(2)} · giro ${w.toFixed(2)}`;
+}
+
+function soltar() {
+  arrastrando = false;
+  v = 0; w = 0;
+  moverKnob(0, 0);
+  $("lectura").textContent = "avance 0.00 · giro 0.00";
+}
+
+pad.addEventListener("touchstart", e => { arrastrando = true; desdeEvento(e); e.preventDefault(); }, {passive:false});
+pad.addEventListener("touchmove",  e => { if (arrastrando) { desdeEvento(e); e.preventDefault(); } }, {passive:false});
+pad.addEventListener("touchend",   e => { soltar(); e.preventDefault(); }, {passive:false});
+pad.addEventListener("touchcancel", soltar);
+/* Ratón: solo para probar desde una computadora. */
+pad.addEventListener("mousedown", e => { arrastrando = true; desdeEvento(e); });
+window.addEventListener("mousemove", e => { if (arrastrando) desdeEvento(e); });
+window.addEventListener("mouseup",  () => { if (arrastrando) soltar(); });
+
+/* Si el cliente cambia de pestaña o bloquea el teléfono, se suelta el
+   acelerador en el acto. No alcanza con el hombre muerto del ESP32: mejor que
+   la orden de parar salga desde acá también. */
+document.addEventListener("visibilitychange", () => { if (document.hidden) soltar(); });
+window.addEventListener("blur", soltar);
+
+/* Envío de la consigna a 10 Hz.
+   Solo se manda si hay movimiento, o si el último envío NO fue cero — así el
+   cero final (el "solté el joystick") siempre llega, pero no se satura la red
+   con ceros cuando el robot está quieto. */
+setInterval(async () => {
+  if (fase !== "validada" && fase !== "comprando") return;
+  if (v === 0 && w === 0 && ultimoV === 0 && ultimoW === 0) return;
+  ultimoV = v; ultimoW = w;
+  try { await post("/control", {v, w}); marcarRed(true); }
+  catch (e) { marcarRed(false); }
+}, 100);
+
+/* ── Acciones discretas ────────────────────────────────────────────────── */
+
+document.querySelectorAll("[data-accion]").forEach(b => {
+  b.addEventListener("click", async () => {
+    const a = b.dataset.accion;
+    b.disabled = true;
+    try { await post("/accion", {accion: a}); $("aviso-control").textContent = ""; }
+    catch (e) { $("aviso-control").textContent = "No se pudo enviar la orden."; }
+    setTimeout(() => { b.disabled = false; }, 600);
+  });
+});
+
+/* ── Pestañas ──────────────────────────────────────────────────────────── */
+
+$("tab-manejar").addEventListener("click", () => {
+  $("tab-manejar").classList.add("act"); $("tab-comprar").classList.remove("act");
+  $("vista-manejar").style.display = ""; $("vista-comprar").style.display = "none";
+});
+$("tab-comprar").addEventListener("click", () => {
+  $("tab-comprar").classList.add("act"); $("tab-manejar").classList.remove("act");
+  $("vista-comprar").style.display = ""; $("vista-manejar").style.display = "none";
+  soltar();
+});
+
+/* ── 3. Catálogo ───────────────────────────────────────────────────────── */
+
+async function cargarCatalogo() {
+  try {
+    const r = await fetch("/api/productos?solo_activos=true");
+    productos = await r.json();
+  } catch (e) {
+    productos = [];
+  }
+  const cont = $("catalogo");
+  cont.innerHTML = "";
+  if (!productos.length) {
+    cont.innerHTML = '<p class="sub">No hay productos disponibles.</p>';
+    return;
+  }
+  productos.forEach(p => {
+    const d = document.createElement("div");
+    d.className = "prod";
+    d.innerHTML = `
+      <div>
+        <div class="n">${p.nombre}</div>
+        <div class="d">${p.descuento_pct}% de descuento</div>
+      </div>
+      <div class="p">
+        <div class="viejo">$${p.precio_base.toFixed(2)}</div>
+        <div class="nuevo">$${p.precio_final.toFixed(2)}</div>
+      </div>`;
+    d.addEventListener("click", async () => {
+      elegido = p;
+      document.querySelectorAll(".prod").forEach(x => x.classList.remove("sel"));
+      d.classList.add("sel");
+      $("btn-comprar").disabled = false;
+      $("btn-comprar").textContent = `Comprar ${p.nombre} — $${p.precio_final.toFixed(2)}`;
+      try { await post("/producto", {producto_id: p.id}); } catch (e) {}
+    });
+    cont.appendChild(d);
+  });
+}
+
+$("btn-comprar").addEventListener("click", async () => {
+  if (!elegido) return;
+  $("btn-comprar").disabled = true;
+  $("btn-comprar").textContent = "Registrando…";
+  soltar();
+  try {
+    const r = await post("/finalizar", {producto_id: elegido.id});
+    const t = r.transaccion || {};
+    $("recibo").innerHTML = `
+      <div class="prod" style="margin:0">
+        <div><div class="n">${r.producto.nombre}</div>
+             <div class="d">${r.producto.descuento_pct}% de descuento</div></div>
+        <div class="p"><div class="viejo">$${r.producto.precio_base.toFixed(2)}</div>
+             <div class="nuevo">$${(t.precio_final ?? r.producto.precio_final).toFixed(2)}</div></div>
+      </div>
+      <p class="sub" style="margin-top:12px">
+        Comprobante N.º ${t.id ?? "—"} · Cédula ${t.cedula ?? ""}
+      </p>`;
+    fase = "finalizada";
+    mostrar("p-gracias");
+  } catch (e) {
+    $("aviso-control").textContent = "No se pudo registrar la compra.";
+    $("btn-comprar").disabled = false;
+    $("btn-comprar").textContent = "Reintentar";
+  }
+});
+
+/* ── 4. Sondeo del estado de la sesión ─────────────────────────────────────
+   Sirve para enterarse de lo que decide el robot: que la sesión venció, que
+   otro cliente la reemplazó, o que la interacción terminó desde la pantalla. */
+
+async function sondear() {
+  if (!TOKEN) return terminar("😕", "Enlace inválido",
+                              "Escaneá de nuevo el QR de la pantalla del robot.");
+  try {
+    const r = await fetch(API);
+    if (r.status === 404) {
+      return terminar("⌛", "La sesión venció",
+                      "Volvé a escanear el QR de la pantalla del robot.");
+    }
+    const d = await r.json();
+    marcarRed(true);
+
+    if (d.fase !== fase) {
+      fase = d.fase;
+      if (fase === "expirada")  terminar("⌛", "La sesión venció",
+                                         "Volvé a escanear el QR del robot.");
+      if (fase === "cancelada") terminar("🐧", "Sesión cerrada",
+                                         d.mensaje || "El robot cerró la sesión.");
+      if (fase === "finalizada" && !$("p-gracias").classList.contains("activa")) {
+        mostrar("p-gracias");
+      }
+    }
+  } catch (e) {
+    marcarRed(false);
+  }
+}
+
+function terminar(icono, titulo, texto) {
+  soltar();
+  $("fin-icono").textContent  = icono;
+  $("fin-titulo").textContent = titulo;
+  $("fin-texto").textContent  = texto;
+  mostrar("p-fin");
+}
+
+setInterval(sondear, 1500);
+sondear();
+</script>
+</body>
+</html>

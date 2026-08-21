@@ -1,0 +1,32 @@
+# Dependencias de la Raspberry Pi (pantalla, cámara, UART)
+#
+#   source ~/mi_proyecto_env/bin/activate
+#   pip install -r requirements-pi.txt
+#
+# La Pi NO lleva MediaPipe: la visión corre en la PC. Acá solo hace falta
+# capturar, comprimir, dibujar y hablar con el ESP32 (~80 MB en total).
+#
+# OJO en Raspberry Pi 5: creá el entorno con --system-site-packages, si no
+# gpiozero y lgpio (que se instalan con apt) no se van a ver desde el venv:
+#   sudo apt install -y python3-lgpio
+#   python3 -m venv --system-site-packages ~/mi_proyecto_env
+
+# --- Interfaz gráfica (el pingüino) ---
+pygame
+numpy
+
+# --- Cámara y enlace con la PC ---
+opencv-python-headless
+pyzmq
+
+# --- UART hacia el ESP32 ---
+pyserial
+
+# --- Botones del operador ---
+gpiozero
+
+# --- QR de sesión que se dibuja en la pantalla ---
+# SIN [pil] a propósito: solo se usa para calcular la matriz de módulos y se
+# dibuja con Pygame, así que no hace falta Pillow. Si falta esta librería el
+# robot no se cae: muestra la URL en texto.
+qrcode

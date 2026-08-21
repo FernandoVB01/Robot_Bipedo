@@ -183,6 +183,12 @@ Debe girar derecha, izquierda, arriba, abajo y volver al centro.
 
 ### A.6 Liberar el UART del ESP32
 
+> **⚠️ ¿Raspberry Pi 5? Este apartado NO aplica — mirá `SETUP_PI5.md`.**
+> En la Pi 5 el Bluetooth va por otro UART, así que `disable-bt` apaga el
+> Bluetooth **para nada y te deja igual sin puerto serie**. Ahí alcanza con
+> `dtoverlay=uart0-pi5`. Ojo también con `/dev/serial0`: en la Pi 5 es el
+> conector de depuración, no los pines 8/10.
+
 En la Pi 4 el Bluetooth ocupa `/dev/ttyAMA0`. Agregá a `/boot/firmware/config.txt`:
 
 ```
@@ -452,6 +458,13 @@ py sync_firebase.py
 ---
 
 ## La pantalla Tontec — dejala para el final
+
+> **⚠️ ¿Raspberry Pi 5? Este panel no va a funcionar.** El driver `fbtft` ya no
+> está en los kernels modernos y `fbcp-ili9341` no corre en la Pi 5 (usa
+> registros del BCM2835 y DispmanX, que no existen ahí). Pasate a HDMI o a la
+> Touch Display 2 por DSI — son dos números en `config.json`. Detalles en
+> `SETUP_PI5.md`, sección 3.
+
 
 El código ya es agnóstico del panel: la GUI se dibuja en un lienzo virtual de
 1280×720 y se escala a lo que diga `pantalla.ancho/alto`. Pasar de HDMI al Tontec

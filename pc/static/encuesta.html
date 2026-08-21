@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Robot Pingüino — Registrate y llevate tu muestra</title>
+<style>
+  :root{ --primario:#0bb05e; --fondo:#0f1720; --tarjeta:#182430; --texto:#eef3f6; --tenue:#9fb0bd; --borde:#2a3a48; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--fondo);
+       color:var(--texto);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:18px}
+  .card{background:var(--tarjeta);border:1px solid var(--borde);border-radius:18px;width:100%;max-width:440px;padding:26px 22px}
+  .logo{font-size:13px;letter-spacing:2px;color:var(--primario);font-weight:700;text-transform:uppercase}
+  h1{font-size:22px;margin:6px 0 4px;line-height:1.2}
+  .sub{color:var(--tenue);font-size:14px;margin:0 0 18px}
+  label{display:block;font-size:13px;color:var(--tenue);margin:14px 0 6px}
+  input{width:100%;padding:13px 14px;border-radius:11px;border:1px solid var(--borde);background:#0e1620;color:var(--texto);font-size:16px}
+  input:focus{outline:none;border-color:var(--primario)}
+  button{width:100%;margin-top:22px;padding:15px;border:0;border-radius:12px;background:var(--primario);color:#03130a;font-size:17px;font-weight:700}
+  button:disabled{opacity:.6}
+  .err{color:#ff8080;font-size:13px;margin-top:10px;min-height:16px}
+  #gracias{display:none;text-align:center}
+  #gracias .tick{font-size:52px}
+  .codigo{font-size:30px;font-weight:800;letter-spacing:3px;color:var(--primario);background:#0e1620;border:2px dashed var(--primario);border-radius:12px;padding:14px;margin:16px 0}
+  .nota{color:var(--tenue);font-size:14px}
+</style>
+</head>
+<body>
+<div class="card">
+  <div id="form">
+    <div class="logo">Robot Pingüino</div>
+    <h1>Registrate y llevate tu muestra 🎁</h1>
+    <p class="sub">Dejanos tus datos y retirá una muestra del nuevo producto.</p>
+
+    <label for="nombre">Nombre y apellido</label>
+    <input id="nombre" type="text" autocomplete="name" placeholder="Tu nombre">
+
+    <label for="cedula">Cédula</label>
+    <input id="cedula" type="tel" inputmode="numeric" maxlength="10" autocomplete="off" placeholder="10 dígitos">
+
+    <label for="telefono">Teléfono / WhatsApp</label>
+    <input id="telefono" type="tel" autocomplete="tel" placeholder="09xxxxxxxx">
+
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="email" placeholder="tu@email.com">
+
+    <button id="enviar" onclick="enviar()">Enviar y obtener mi código</button>
+    <div class="err" id="err"></div>
+  </div>
+
+  <div id="gracias">
+    <div class="tick">✅</div>
+    <h1>¡Gracias!</h1>
+    <p class="nota">Mostrá este código para retirar tu muestra:</p>
+    <div class="codigo" id="codigo">—</div>
+    <p class="nota">Acercate al robot con esta pantalla.</p>
+  </div>
+</div>
+
+<script>
+function cedulaValida(c){
+  if(!/^\d{10}$/.test(c)) return false;
+  var prov = parseInt(c.slice(0,2),10);
+  if(prov < 1 || prov > 24) return false;
+  if(parseInt(c[2],10) >= 6) return false;
+  var coef=[2,1,2,1,2,1,2,1,2], suma=0;
+  for(var i=0;i<9;i++){ var p=parseInt(c[i],10)*coef[i]; if(p>=10)p-=9; suma+=p; }
+  var ver=(10-(suma%10))%10;
+  return ver === parseInt(c[9],10);
+}
+
+async function enviar(){
+  var err=document.getElementById("err"); err.textContent="";
+  var nombre=document.getElementById("nombre").value.trim();
+  var cedula=document.getElementById("cedula").value.trim();
+  var telefono=document.getElementById("telefono").value.trim();
+  var email=document.getElementById("email").value.trim();
+  var btn=document.getElementById("enviar");
+
+  if(nombre.length<2){ err.textContent="Poné tu nombre."; return; }
+  if(!cedulaValida(cedula)){ err.textContent="La cédula no es válida (revisá los 10 dígitos)."; return; }
+  if(!telefono && !email){ err.textContent="Dejá al menos un teléfono o email."; return; }
+
+  btn.disabled=true; btn.textContent="Enviando…";
+  try{
+    var r = await fetch("/api/encuesta", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({nombre:nombre, cedula:cedula, telefono:telefono, email:email})
+    });
+    if(!r.ok){
+      var e = await r.json().catch(function(){return {};});
+      throw new Error(e.detail || "No se pudo registrar.");
+    }
+    var data = await r.json();
+    document.getElementById("codigo").textContent = data.codigo || "OK";
+    document.getElementById("form").style.display="none";
+    document.getElementById("gracias").style.display="block";
+  }catch(ex){
+    err.textContent = ex.message || "No se pudo enviar. Intentá de nuevo.";
+    btn.disabled=false; btn.textContent="Enviar y obtener mi código";
+  }
+}
+</script>
+</body>
+</html>

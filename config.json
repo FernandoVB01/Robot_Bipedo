@@ -10,11 +10,18 @@
     "_nota_datos_moviles": "El tráfico Pi<->PC va por la WiFi del hotspot, NO por la red celular: no consume tu plan de datos. Los datos móviles solo hacen falta para Firebase."
   },
 
+  "interaccion": {
+    "url_encuesta": "",
+    "_nota_url_encuesta": "URL a la que apunta el QR del estado 1 (formulario). VACÍO = se arma solo 'http://<pc_ip>:<api_puerto>/encuesta' (cuando todos están en el hotspot). Poné acá tu URL de Ngrok (ej. 'https://xxxx.ngrok-free.dev/encuesta') para que el cliente la abra con datos móviles. Atajo sin editar: exportá ROBOT_URL_ENCUESTA antes de lanzar interaccion_ojos.py."
+  },
+
   "pantalla": {
     "ancho": 480,
     "alto": 320,
     "fullscreen": true,
     "ocultar_cursor": true,
+    "rotacion": 0,
+    "_nota_rotacion": "Rotación del panel de los ojos: 0, 90, 180 o 270. Cambialo si el Tontec va montado girado y la imagen sale de costado (solo afecta a interaccion_ojos.py).",
     "_nota": "Resolución FÍSICA del panel (Tontec 3.5\" SPI = 480x320). La GUI se dibuja siempre en un lienzo virtual de 1280x720 y se escala a este tamaño: no hay que retocar ninguna pantalla del código.",
     "_nota_hdmi": "Para probar en un monitor HDMI normal: 1280 x 720 y fullscreen=false."
   },
@@ -40,7 +47,68 @@
     "mediapipe_confianza_seguimiento": 0.50,
     "dedos_minimos_palma_abierta": 4,
     "qr_segunda_pasada_otsu": true,
+    "persona_activa": true,
+    "persona_confianza": 0.45,
+    "_nota_persona": "Detección de PERSONAS (silueta completa) con EfficientDet-Lite0, para que el robot vaya hacia el cliente en vez de esperar un gesto. El modelo (~14 MB) lo descarga solo pc_server.py la primera vez que arranca CON internet. Si está en false, o si el modelo no pudo bajarse, el robot sigue funcionando con el disparo por gesto de mano de siempre. Subí persona_confianza si dispara con cosas que no son personas; bajala si le cuesta ver gente de costado.",
     "_nota": "jpeg_calidad entre 40-70 es buen balance latencia/calidad en red local."
+  },
+
+  "sesion": {
+    "_nota": "Sesión interactiva: el robot muestra un QR, el cliente lo escanea y maneja el robot desde su celular. La WebApp la sirve la PC en http://<pc_ip>:<api_puerto>/c/<token>.",
+    "timeout_invitacion_s": 45,
+    "_nota_invitacion": "Cuánto espera con el QR en pantalla a que alguien lo escanee. Si nadie lo hace, agradece y vuelve a la ruta: el robot no puede quedar secuestrado por alguien que pasó de largo.",
+    "timeout_cedula_s": 90,
+    "_nota_cedula": "Tiempo para que el cliente escriba su cédula en el teléfono.",
+    "timeout_teleop_s": 240,
+    "_nota_teleop": "Máximo que un cliente puede tener el control del robot. Al vencerse se cierra la sesión aunque no haya comprado.",
+    "tiempo_factura_s": 12,
+    "tiempo_despedida_s": 7,
+    "qr_lado_px": 300,
+    "_nota_qr": "Lado del QR en el lienzo virtual de 1280x720. En el panel de 480x320 se ve a ~112 px, que alcanza de sobra para escanearlo a 30-40 cm. Si cuesta leerlo, subilo antes de tocar cualquier otra cosa."
+  },
+
+  "acercamiento": {
+    "_nota": "Lazo que lleva al robot hasta la persona detectada y lo frena enfrente. Corre en la Pi (pi_acercamiento.py) y manda MOV:<v>:<w> al ESP32.",
+    "alto_objetivo": 0.62,
+    "_nota_alto_objetivo": "EL PARÁMETRO A CALIBRAR. Es la altura del recuadro de la persona, como fracción del encuadre, con la que el robot decide que ya llegó. NO son metros. Para calibrarlo: parate donde querés que el robot se detenga y mirá el número que imprime '[ACERCAMIENTO] ... alto=0.XX'. Copiá ese número acá. Más grande = frena más cerca.",
+    "alto_tolerancia": 0.05,
+    "zona_muerta_x": 0.12,
+    "_nota_zona_muerta": "Franja alrededor del centro en la que no corrige el rumbo. Si la bajás mucho, el robot oscila de lado a lado persiguiendo el centro exacto.",
+    "umbral_encarar": 0.22,
+    "_nota_encarar": "Si la persona está más descentrada que esto, el robot GIRA SIN AVANZAR hasta encararla. Sin este seguro describe una curva y pasa de largo por al lado del cliente.",
+    "kp_giro": 0.9,
+    "kp_avance": 1.2,
+    "v_max": 0.14,
+    "w_max": 0.18,
+    "v_min": 0.06,
+    "_nota_velocidades": "Deliberadamente bajas: el robot se está acercando a una PERSONA. v_min es el duty por debajo del cual los motores zumban pero no mueven el robot.",
+    "timeout_s": 12.0,
+    "perdida_s": 1.2,
+    "confirmar_s": 0.4,
+    "confirmar_frames": 3,
+    "_nota_confirmar_frames": "Cuadros seguidos con persona antes de salir corriendo. Con 1 solo, un falso positivo manda al robot contra un perchero."
+  },
+
+  "pinguino": {
+    "escala": 0.62,
+    "_nota": "Tamaño de Pingüi en el lienzo virtual de 1280x720. 1.0 son unos 400 px de alto. Se dibuja con primitivas de Pygame (pi/pinguino.py): no hay imágenes que copiar a la Raspberry."
+  },
+
+  "movimiento": {
+    "_nota": "ATENCIÓN: estos valores NO se leen desde acá. Viven en el ESP32 y se guardan en su NVS, porque el lazo de movimiento es de tiempo real y no puede depender de un archivo en la Pi. Se anotan aquí como referencia y bitácora del equipo.",
+    "_como_calibrar": "Por UART, sin reflashear: 'CAL:<parametro>:<valor>' y al final 'CAL:guardar:1'. Con 'CAL:listar:0' imprime los valores actuales. El procedimiento completo está al final de esp32/main/main.c.",
+    "ms_grado": 7.2,
+    "_nota_ms_grado": "EL QUE ARREGLA EL GIRO DE 90°. Milisegundos de giro por grado. El overshoot medido (90° pedidos → 106-110° reales) es un ~18% constante: eso es inercia por rueda libre, no error aleatorio. Fórmula: ms_grado_nuevo = ms_grado_actual x (90 / grados_medidos).",
+    "giro_duty": 0.12,
+    "cpr": 90.0,
+    "_nota_cpr": "Cuentas del tacómetro de la VESC por vuelta de rueda. 90 asume 15 pares de polos (6 cuentas por revolución eléctrica). Medilo: anotá el tach de la telemetría, girá la rueda una vuelta exacta a mano, restá.",
+    "radio_mm": 84.0,
+    "via_mm": 300.0,
+    "_nota_geometria": "radio_mm = radio de la rueda (la hub de 168 mm de diámetro da 84). via_mm = distancia entre los centros de las dos ruedas. Medilos con cinta: de estos dos números sale el giro en lazo cerrado.",
+    "freno_a": 4.0,
+    "_nota_freno": "Corriente de frenado (COMM_SET_CURRENT_BRAKE). Antes 'parar' era duty=0, o sea rueda libre, y el robot seguía de largo. Si todavía se pasa, subila; si se sacude al frenar, bajala.",
+    "anticipo": 0.10,
+    "_nota_anticipo": "Fracción del giro en la que empieza a frenar (0.10 = corta al 90%). Es el ajuste fino, después de freno_a."
   },
 
   "ptz": {
@@ -82,7 +150,9 @@
     "tiempo_resultado_pantalla_s": 15,
     "cedula_digitos": 10,
     "pais": "Ecuador",
-    "_nota_cedula": "La validación del algoritmo Módulo 10 está implementada en pi_gui_gpio.py.",
+    "_nota_cedula": "La validación Módulo 10 está en pc/sesion.py (función validar_cedula), y la ejecuta la PC cuando el cliente envía la cédula desde su celular. OJO: esta nota antes decía que estaba en pi_gui_gpio.py, pero ahí NUNCA se implementó — se aceptaba cualquier cadena de 10 dígitos. Ahora sí valida provincia, tipo y dígito verificador. Probala con: python pc/sesion.py",
+    "giro_final_grados": 180,
+    "_nota_giro_final": "Giro con el que el robot se despide y retoma su ruta original, en grados. Lo ejecuta el ESP32 en lazo cerrado (comando GIRO:).",
     "avance_al_ver_mano_ms": 5000,
     "avance_al_ver_mano_velocidad": 0.10,
     "_nota_avance": "Cuando la cámara detecta la mano, el robot avanza este tiempo (ms) a esta velocidad (duty 0.0-1.0) y se detiene solo. La ejecución la maneja el ESP32 (comando AVANZAR_T).",

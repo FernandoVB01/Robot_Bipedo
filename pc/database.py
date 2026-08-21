@@ -99,6 +99,9 @@ class QRCode(Base):
     usado       = Column(Boolean, default=False, nullable=False)
     creado_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
     usado_at    = Column(DateTime, nullable=True)
+    usos_max      = Column(Integer, default=0,    nullable=False)   # 0 = ilimitado
+    usos_actuales = Column(Integer, default=0,    nullable=False)
+    activo        = Column(Boolean, default=True,  nullable=False)
 
     producto = relationship("Producto", back_populates="qr_codes")
 
@@ -129,6 +132,27 @@ class Transaccion(Base):
     def __repr__(self):
         return (f"<Transaccion id={self.id} cedula={self.cedula} "
                 f"total=${self.precio_final} ts={self.timestamp}>")
+
+
+class Encuesta(Base):
+    """
+    Datos que el cliente carga desde su celular en el flujo de gestos
+    (PULGAR ARRIBA → estado 1). Se guarda LOCAL en la PC — funciona sin internet
+    en el hotspot — y se espeja a Firebase después con sync_firebase.py.
+    """
+    __tablename__ = "encuestas"
+
+    id        = Column(Integer, primary_key=True, autoincrement=True)
+    nombre    = Column(String(120), nullable=True)
+    cedula    = Column(String(10),  nullable=True, index=True)
+    telefono  = Column(String(30),  nullable=True)
+    email     = Column(String(160), nullable=True)
+    codigo    = Column(String(16),  nullable=True)   # el que ve el cliente para su muestra
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    sincronizado_firebase = Column(Boolean, default=False, nullable=False, index=True)
+
+    def __repr__(self):
+        return f"<Encuesta id={self.id} cedula={self.cedula} email={self.email}>"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -169,6 +193,11 @@ class Database:
         migraciones = {
             "transacciones": {
                 "sincronizado_firebase": "BOOLEAN NOT NULL DEFAULT 0",
+            },
+            "qr_codes": {
+                "usos_max":      "INTEGER NOT NULL DEFAULT 0",
+                "usos_actuales": "INTEGER NOT NULL DEFAULT 0",
+                "activo":        "BOOLEAN NOT NULL DEFAULT 1",
             },
         }
         with self._engine.begin() as conn:
@@ -330,14 +359,39 @@ class Database:
             return [self._qr_to_dict(r) for r in rows]
 
     def crear_qr(self, codigo: str, producto_id: int,
-                 uso_unico: bool = False) -> Optional[dict]:
+                 uso_unico: bool = False, usos_max: int = 0) -> Optional[dict]:
         with self._session() as s:
             qr = QRCode(codigo=codigo, producto_id=producto_id,
-                        uso_unico=uso_unico)
+                        uso_unico=uso_unico, usos_max=usos_max)
             s.add(qr)
             s.commit()
             s.refresh(qr)
             return self._qr_to_dict(qr)
+
+    def desactivar_qr(self, qr_id: int) -> bool:
+        with self._session() as s:
+            qr = s.get(QRCode, qr_id)
+            if qr is None:
+                return False
+            qr.activo = False
+            s.commit()
+            return True
+
+    def get_qr_activos_detallado(self, limit: int = 100) -> list[dict]:
+        """QR activos con nombre y descuento del producto (para el gestor del dashboard)."""
+        with self._session() as s:
+            rows = (s.query(QRCode)
+                     .filter_by(activo=True)
+                     .order_by(QRCode.id.desc())
+                     .limit(limit).all())
+            salida = []
+            for q in rows:
+                d = self._qr_to_dict(q)
+                p = q.producto
+                d["producto_nombre"] = p.nombre if p else None
+                d["descuento_pct"]   = int(p.descuento * 100) if p else 0
+                salida.append(d)
+            return salida
 
     def validar_y_usar_qr(self, codigo: str) -> Optional[dict]:
         """
@@ -347,15 +401,45 @@ class Database:
         """
         with self._session() as s:
             qr = s.query(QRCode).filter_by(codigo=codigo).first()
-            if not qr:
+            if not qr or not qr.activo:
                 return None
             if qr.uso_unico and qr.usado:
                 return None    # QR de uso único ya consumido
-            if qr.uso_unico:
-                qr.usado    = True
-                qr.usado_at = datetime.utcnow()
-                s.commit()
+            if qr.usos_max and qr.usos_actuales >= qr.usos_max:
+                return None    # límite de usos alcanzado
+            qr.usos_actuales += 1
+            qr.usado_at = datetime.utcnow()
+            if qr.uso_unico or (qr.usos_max and qr.usos_actuales >= qr.usos_max):
+                qr.usado = True
+            s.commit()
             return self._qr_to_dict(qr)
+
+    def consumir_qr_promo(self, codigo: str) -> Optional[dict]:
+        """
+        Para el ROBOT: valida el código leído por la cámara, consume un uso y
+        devuelve la promo real (nombre del producto + descuento). None si no
+        existe, está inactivo o se agotó el límite de usos.
+        """
+        with self._session() as s:
+            qr = s.query(QRCode).filter_by(codigo=codigo).first()
+            if not qr or not qr.activo:
+                return None
+            if qr.usos_max and qr.usos_actuales >= qr.usos_max:
+                return None
+            qr.usos_actuales += 1
+            qr.usado_at = datetime.utcnow()
+            if qr.uso_unico or (qr.usos_max and qr.usos_actuales >= qr.usos_max):
+                qr.usado = True
+            p = qr.producto
+            resultado = {
+                "valido":        True,
+                "nombre":        p.nombre if p else None,
+                "descuento_pct": int(p.descuento * 100) if p else 0,
+                "usos_actuales": qr.usos_actuales,
+                "usos_max":      qr.usos_max,
+            }
+            s.commit()
+            return resultado
 
     # ── CRUD Transacciones ───────────────────────────────────────────────────
 
@@ -398,6 +482,45 @@ class Database:
                 Transaccion.timestamp.desc()
             ).offset(offset).limit(limit).all()
             return [self._transaccion_to_dict(r) for r in rows]
+
+    # ── CRUD Encuestas (flujo de gestos: pulgar arriba) ──────────────────────
+
+    def registrar_encuesta(self, nombre: Optional[str], cedula: Optional[str],
+                           telefono: Optional[str], email: Optional[str],
+                           codigo: Optional[str] = None) -> dict:
+        """Guarda los datos que el cliente cargó desde su celular."""
+        with self._session() as s:
+            e = Encuesta(nombre=nombre, cedula=cedula, telefono=telefono,
+                         email=email, codigo=codigo)
+            s.add(e)
+            s.commit()
+            s.refresh(e)
+            return self._encuesta_to_dict(e)
+
+    def get_encuestas(self, limit: int = 100, offset: int = 0) -> list[dict]:
+        with self._session() as s:
+            rows = (s.query(Encuesta)
+                     .order_by(Encuesta.timestamp.desc())
+                     .offset(offset).limit(limit).all())
+            return [self._encuesta_to_dict(r) for r in rows]
+
+    def get_encuestas_pendientes_firebase(self, limit: int = 500) -> list[dict]:
+        """Encuestas que todavía no se subieron a Firebase (para sync_firebase.py)."""
+        with self._session() as s:
+            rows = (s.query(Encuesta)
+                     .filter_by(sincronizado_firebase=False)
+                     .order_by(Encuesta.timestamp.asc())
+                     .limit(limit).all())
+            return [self._encuesta_to_dict(r) for r in rows]
+
+    def marcar_encuesta_sincronizada(self, encuesta_id: int) -> bool:
+        with self._session() as s:
+            e = s.get(Encuesta, encuesta_id)
+            if e is None:
+                return False
+            e.sincronizado_firebase = True
+            s.commit()
+            return True
 
     # ── Sincronización con Firebase ──────────────────────────────────────────
 
@@ -491,6 +614,9 @@ class Database:
             "producto_id": q.producto_id,
             "uso_unico":   q.uso_unico,
             "usado":       q.usado,
+            "usos_max":       q.usos_max,
+            "usos_actuales":  q.usos_actuales,
+            "activo":         q.activo,
             "creado_at":   q.creado_at.isoformat(),
             "usado_at":    q.usado_at.isoformat() if q.usado_at else None,
         }
@@ -508,6 +634,19 @@ class Database:
             "exito":        t.exito,
             "timestamp":    t.timestamp.isoformat(),
             "sincronizado_firebase": t.sincronizado_firebase,
+        }
+
+    @staticmethod
+    def _encuesta_to_dict(e: "Encuesta") -> dict:
+        return {
+            "id":        e.id,
+            "nombre":    e.nombre,
+            "cedula":    e.cedula,
+            "telefono":  e.telefono,
+            "email":     e.email,
+            "codigo":    e.codigo,
+            "timestamp": e.timestamp.isoformat(),
+            "sincronizado_firebase": e.sincronizado_firebase,
         }
 
 

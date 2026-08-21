@@ -128,8 +128,8 @@ class VisionClient:
     def set_mode(self, mode: str):
         """Cambia el modo de análisis en caliente: 'HAND', 'QR' o 'BOTH'."""
         mode = mode.upper()
-        if mode not in ("HAND", "QR", "BOTH"):
-            raise ValueError(f"Modo inválido: {mode}. Usar HAND, QR o BOTH.")
+        if mode not in ("HAND", "QR", "BOTH", "TODO", "PERSONA"):
+            raise ValueError(f"Modo inválido: {mode}. Usar HAND, QR, BOTH, TODO o PERSONA.")
         with self._mode_lock:
             self._mode = mode
 

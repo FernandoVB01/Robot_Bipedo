@@ -3,6 +3,16 @@
 Documento de referencia para la exposición. Explica qué hace el robot, cómo está
 construido, qué tecnologías usa y cómo se comunican todas sus partes.
 
+> **⚠️ Este documento describe el PRIMER avance (el que se presentó).** La capa
+> interactiva cambió: ahora el robot detecta a la persona y **se acerca solo**, la
+> pantalla **genera** un QR que el cliente escanea con su celular, la cédula se
+> ingresa **en el teléfono** (no con los botones) y desde ahí se **maneja el
+> robot**. La pantalla es un pingüino animado.
+>
+> Todo eso está en **`ARQUITECTURA_IOT.md`**, que es el documento vigente para
+> las secciones 3 (flujo), 4.2 (Raspberry) y 5 (comunicaciones). Lo de acá sigue
+> valiendo para el hardware, la base de datos y las decisiones de fondo.
+
 ---
 
 ## 1. ¿Qué es y para qué sirve?
@@ -55,7 +65,10 @@ capacidad, más el celular como cámara:
 3. **Escaneo QR:** la pantalla pide el QR. La persona lo muestra a la cámara.
 4. **Oferta:** se lee el QR, se muestra el producto y el descuento.
 5. **Cédula:** la persona ingresa su cédula (10 dígitos) con 4 botones físicos.
-   Se valida con el algoritmo **Módulo 10** (validación oficial de cédula ecuatoriana).
+   *(Nota de corrección: aquí se decía que se validaba con el algoritmo **Módulo
+   10**, pero esa validación nunca llegó a implementarse — se aceptaba cualquier
+   cadena de 10 dígitos. Hoy sí existe, en `pc/sesion.py`, y corre cuando el
+   cliente manda la cédula desde el celular. Se prueba con `python pc/sesion.py`.)*
 6. **Factura:** se muestra el comprobante con precio base, descuento y total.
 7. **Registro:** la venta se guarda en **SQLite (local)** y se sube a **Firebase
    (nube)**.

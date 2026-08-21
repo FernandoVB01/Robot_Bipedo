@@ -7,6 +7,13 @@ pc/firebase_credentials.json
 pc/robot_bipedo.db
 *.db
 
+# ── Modelos de MediaPipe (se descargan solos la primera vez) ──
+# No tiene sentido versionarlos: son pesos binarios que pc_server.py baja al
+# arrancar si no están. `hand_landmarker.task` quedó commiteado de antes (7.8 MB);
+# si algún día se limpia el historial, sacarlo también.
+pc/efficientdet_lite0.tflite
+*.tflite
+
 # ── Python ──
 __pycache__/
 *.py[cod]
@@ -18,3 +25,10 @@ venv/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# ── Compilación PlatformIO / ESP-IDF (no versionar el build, pesa cientos de MB) ──
+.pio/
+**/.pio/
+build/
+**/build/
+managed_components/
