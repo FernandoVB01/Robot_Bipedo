@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>HeatKeep - Panel Global</title>
+  <style>
+    :root{--bg:#160d08;--card:#241610;--panel:#1d120c;--hot:#fb923c;--txt:#fdf1e7;--muted:#c79b80;--accent:#f97316;}
+    *{box-sizing:border-box;font-family:system-ui,Segoe UI,Roboto,sans-serif}
+    body{margin:0;background:var(--bg);color:var(--txt);padding:16px}
+    h1{font-size:20px;margin:0 0 4px}
+    .sub{color:var(--muted);font-size:12px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}
+    .card{background:var(--card);border-radius:14px;padding:14px}
+    .card .lbl{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+    .card .val{font-size:30px;font-weight:700;margin-top:4px}
+    .card .unit{font-size:15px;color:var(--muted)}
+    .panel{background:var(--panel);border-radius:14px;padding:16px;margin-bottom:12px}
+    .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+    input[type=range]{flex:1;accent-color:var(--hot)}
+    .spval{font-size:22px;font-weight:700;min-width:80px;text-align:right;color:var(--hot)}
+    button{background:var(--accent);border:0;color:#231005;font-weight:700;padding:9px 16px;border-radius:9px;cursor:pointer;font-size:13px}
+    button.off{background:#3a3a3a;color:#cbd5e1}
+    .st{display:inline-block;padding:4px 10px;border-radius:8px;font-size:13px;font-weight:700}
+    .st.on{background:rgba(251,146,60,.2);color:#fdba74}.st.off{background:#31201a;color:#c79b80}.st.warn{background:rgba(239,68,68,.2);color:#fca5a5}
+    .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#ef4444;margin-right:6px}
+    .dot.on{background:#22c55e}
+  </style>
+</head>
+<body>
+  <h1>HeatKeep &mdash; NUBE</h1>
+  <div class="sub"><span id="dot" class="dot"></span><span id="conn">Conectando a Firebase...</span></div>
+  
+  <div class="grid">
+    <div class="card"><div class="lbl">Temperatura</div><div class="val"><span id="temp">--</span><span class="unit">&deg;C</span></div></div>
+    <div class="card"><div class="lbl">Estado SSR</div><div style="margin-top:8px"><span id="estado" class="st off">--</span></div></div>
+  </div>
+
+  <div class="panel">
+    <div class="row"><b>Ajustar Objetivo Global</b></div>
+    <div class="row" style="margin-top:12px">
+      <input id="sp" type="range" min="25" max="40" step="0.5" value="32">
+      <span class="spval"><span id="spLabel">32.0</span>&deg;C</span>
+    </div>
+    <div class="sub" style="margin-top:6px">Este control sobreescribe la perilla de la maqueta.</div>
+    <div class="row" style="margin-top:14px">
+      <button id="pwr" onclick="togglePower()">Apagar sistema</button>
+    </div>
+  </div>
+
+  <!-- Scripts de Firebase modulares (v10) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+    import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-database.js";
+
+    // Configuración exacta de tu proyecto
+    const firebaseConfig = {
+      databaseURL: "https://heatkeep-3face-default-rtdb.firebaseio.com/"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    let sistemaHabilitado = true;
+
+    // Elementos del DOM
+    const elTemp = document.getElementById('temp');
+    const elEstado = document.getElementById('estado');
+    const elSp = document.getElementById('sp');
+    const elSpLabel = document.getElementById('spLabel');
+    const elPwr = document.getElementById('pwr');
+    const elConn = document.getElementById('conn');
+    const elDot = document.getElementById('dot');
+
+    // Escuchar la telemetría del ESP32 en tiempo real
+    const stateRef = ref(db, 'heatkeep/state');
+    onValue(stateRef, (snapshot) => {
+      const d = snapshot.val();
+      if(d) {
+        elConn.textContent = 'Sincronizado';
+        elDot.className = 'dot on';
+        
+        elTemp.textContent = (d.temp !== null) ? d.temp.toFixed(1) : '--';
+        
+        if(!elSp.matches(':active')) {
+          elSp.value = d.sp;
+          elSpLabel.textContent = d.sp.toFixed(1);
+        }
+
+        sistemaHabilitado = d.on;
+        elPwr.textContent = sistemaHabilitado ? 'Apagar sistema' : 'Encender sistema';
+        elPwr.className = sistemaHabilitado ? '' : 'off';
+
+        if(d.fault) { elEstado.textContent = 'FALLA SENSOR'; elEstado.className = 'st warn'; }
+        else if(d.alarm) { elEstado.textContent = 'SOBRETEMP!'; elEstado.className = 'st warn'; }
+        else if(!d.on) { elEstado.textContent = 'Apagado'; elEstado.className = 'st off'; }
+        else if(d.heat === 'ON') { elEstado.textContent = 'Calentando'; elEstado.className = 'st on'; }
+        else { elEstado.textContent = 'En espera'; elEstado.className = 'st off'; }
+      }
+    });
+
+    // Enviar comandos al ESP32
+    window.enviarComando = function(nuevoSp, nuevoOn) {
+      set(ref(db, 'heatkeep/control'), {
+        cmd: Date.now(),
+        sp: nuevoSp,
+        on: nuevoOn
+      });
+    };
+
+    // Eventos de la interfaz
+    elSp.oninput = () => elSpLabel.textContent = parseFloat(elSp.value).toFixed(1);
+    elSp.onchange = () => enviarComando(parseFloat(elSp.value), sistemaHabilitado);
+    
+    window.togglePower = function() {
+      enviarComando(parseFloat(elSp.value), !sistemaHabilitado);
+    }
+  </script>
+</body>
+</html>
