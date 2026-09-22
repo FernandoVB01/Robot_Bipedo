@@ -12,6 +12,8 @@
 
   "interaccion": {
     "url_encuesta": "",
+    "voz_puerto": 8090,
+    "_nota_voz": "Puerto del servidor de VOZ del robot (pi/voz_server.py). El celular, en el mismo hotspot, abre http://<ip-de-la-Pi>:8090 y ahí se escucha lo que el robot dice, se ve su cara y salen las instrucciones del paso. Para apagar la voz: ROBOT_VOZ=0 antes de lanzar interaccion_ojos.py.",
     "_nota_url_encuesta": "URL a la que apunta el QR del estado 1 (formulario). VACÍO = se arma solo 'http://<pc_ip>:<api_puerto>/encuesta' (cuando todos están en el hotspot). Poné acá tu URL de Ngrok (ej. 'https://xxxx.ngrok-free.dev/encuesta') para que el cliente la abra con datos móviles. Atajo sin editar: exportá ROBOT_URL_ENCUESTA antes de lanzar interaccion_ojos.py."
   },
 

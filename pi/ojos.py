@@ -15,18 +15,38 @@ Emociones (self.animo):
     TRISTE       párpado inclinado hacia afuera, mirada caída
     ESTRELLADO   ojos con forma de estrella (al detectar / dar la oferta)
     DORMIDO      ojos casi cerrados (reposo)
+    AMOR         corazones (al invitar a unirse a PhyCom)
+    HABLANDO     ojos atentos con pulso suave, acompaña a la voz del celular
+
+Gestos (animaciones cortas que se superponen a la emoción):
+    guinar(lado)     cierra un ojo un instante
+    asentir()        los ojos bajan y suben — "sí"
+    negar()          los ojos van y vienen de lado — "no"
+    saltar()         un brinco de entusiasmo
+    mirar_alrededor()  barre la mirada de un lado al otro
 
 Técnica: cada ojo es un rectángulo redondeado. La emoción se logra tapando
 parte del ojo con "párpados" del color del fondo (triángulos o una elipse).
 Es como se hacen los ojos de robot y se lee clarísimo en pantallas chicas.
 
     ojos = Ojos()
+    ojos.ajustar_a(ANCHO, ALTO)   # ← llena el panel, sea 480x320 o 1024x600
     ojos.set_animo(Ojos.ENOJADO)
-    ojos.mirar(0.8, 0.4)      # 0=izq, 0.5=centro, 1=der (coords de la cámara)
+    ojos.mirar(0.8, 0.4)          # 0=izq, 0.5=centro, 1=der (coords de la cámara)
+    ojos.guinar()
     ojos.actualizar(dt)
-    ojos.dibujar(pantalla, cx, cy, escala)
+    ojos.dibujar(pantalla, cx, cy)
 
 Asume FONDO oscuro (pantalla dedicada a los ojos). El color de fondo es Ojos.FONDO.
+
+─────────────────────────────────────────────────────────────────────────────
+POR QUÉ `ajustar_a()`
+─────────────────────────────────────────────────────────────────────────────
+Antes los tamaños eran fijos (180 px de ojo, 250 de separación) y quien los
+usaba tenía que adivinar una `escala`. En el Tontec de 9x16 cm eso dejaba los
+ojos chiquitos y corridos hacia una esquina. Ahora se le pasa el tamaño real
+del panel y los ojos se dimensionan solos para llenarlo, con el mismo aspecto
+en cualquier pantalla.
 =============================================================================
 """
 
@@ -45,11 +65,22 @@ class Ojos:
     TRISTE      = "triste"
     ESTRELLADO  = "estrellado"
     DORMIDO     = "dormido"
+    AMOR        = "amor"
+    HABLANDO    = "hablando"
 
     # ── Colores ───────────────────────────────────────────────────────────────
     OJO      = (64, 224, 255)     # cian brillante
     FONDO    = (6, 10, 18)        # el fondo de la pantalla de los ojos
     ESTRELLA = (255, 216, 77)     # ojos de estrella
+    CORAZON  = (255, 96, 128)     # ojos de corazón (AMOR)
+
+    # ── Proporciones sobre el panel (las usa ajustar_a) ───────────────────────
+    # Los dos ojos + el hueco del medio ocupan este % del ancho de la pantalla.
+    PCT_ANCHO = 0.88
+    # Alto del ojo como % del alto de la pantalla.
+    PCT_ALTO  = 0.60
+    # Hueco entre los ojos, como fracción del ancho de UN ojo.
+    HUECO     = 0.42
 
     def __init__(self, ancho=180, alto=180, radio=52, sep=250):
         self.animo   = self.NEUTRO
@@ -57,6 +88,10 @@ class Ojos:
         self.base_h  = alto       # alto base del ojo
         self.radio   = radio      # redondeo de esquinas
         self.sep     = sep        # separación entre centros de los ojos
+
+        # Recorrido de la mirada en px (lo recalcula ajustar_a según el panel)
+        self.rango_x = 24
+        self.rango_y = 15
 
         self._t = 0.0
         # Mirada (0..1), con suavizado
@@ -67,6 +102,47 @@ class Ojos:
         self._prox = self._sortear()
         # Factores de tamaño animados (para transiciones suaves entre emociones)
         self._wf = 1.0; self._hf = 1.0
+
+        # Gestos: (nombre, tiempo_restante, duración_total) o None
+        self._gesto = None
+        self._gesto_t = 0.0
+        self._gesto_dur = 0.0
+        self._gesto_lado = 1
+
+    # ── Ajuste al panel ───────────────────────────────────────────────────────
+
+    def ajustar_a(self, ancho: int, alto: int,
+                  pct_ancho: float = None, pct_alto: float = None):
+        """
+        Dimensiona los ojos para LLENAR una pantalla de `ancho` x `alto`.
+
+        Reparte el ancho disponible entre: ojo + hueco + ojo, y recorta el alto
+        del ojo para que quepa en la pantalla con aire arriba y abajo. Después
+        de llamar a esto, `dibujar()` se usa con escala 1.0.
+
+        Devuelve (ancho_ojo, alto_ojo, separación) por si el que llama los
+        quiere para posicionar otras cosas.
+        """
+        pa = self.PCT_ANCHO if pct_ancho is None else pct_ancho
+        ph = self.PCT_ALTO  if pct_alto  is None else pct_alto
+
+        # Ancho: 2 ojos + 1 hueco (el hueco es una fracción del ojo)
+        util_w = ancho * pa
+        w = util_w / (2.0 + self.HUECO)
+
+        # Alto: lo que pida el porcentaje, pero sin dejar ojos absurdamente
+        # alargados (un ojo más alto que ancho x1.35 se lee como una barra).
+        h = min(alto * ph, w * 1.35)
+
+        self.base_w = w
+        self.base_h = h
+        self.sep    = w * (1.0 + self.HUECO)      # centro a centro
+        self.radio  = min(w, h) * 0.30            # esquinas proporcionales
+
+        # La mirada se mueve dentro del aire que queda a los costados.
+        self.rango_x = max(6.0, (ancho - (self.sep + w)) * 0.42)
+        self.rango_y = max(4.0, (alto - h) * 0.22)
+        return self.base_w, self.base_h, self.sep
 
     # ── API ───────────────────────────────────────────────────────────────────
 
@@ -84,6 +160,32 @@ class Ojos:
         """Fuerza un parpadeo ya."""
         self._prox = 0.0
 
+    # ── Gestos ────────────────────────────────────────────────────────────────
+
+    def gesto(self, nombre: str, dur: float = None, lado: int = 1):
+        """
+        Lanza un gesto corto. Se superpone a la emoción actual y se apaga solo.
+        Gestos: "guino", "asentir", "negar", "saltar", "alrededor".
+        """
+        duraciones = {"guino": 0.45, "asentir": 0.9, "negar": 0.9,
+                      "saltar": 0.7, "alrededor": 2.0}
+        if nombre not in duraciones:
+            return
+        self._gesto      = nombre
+        self._gesto_dur  = dur if dur else duraciones[nombre]
+        self._gesto_t    = 0.0
+        self._gesto_lado = lado
+
+    def guinar(self, lado: int = 1):   self.gesto("guino", lado=lado)
+    def asentir(self):                 self.gesto("asentir")
+    def negar(self):                   self.gesto("negar")
+    def saltar(self):                  self.gesto("saltar")
+    def mirar_alrededor(self):         self.gesto("alrededor")
+
+    @property
+    def gesto_activo(self) -> bool:
+        return self._gesto is not None
+
     # ── Actualización ──────────────────────────────────────────────────────────
 
     def _targets(self):
@@ -94,6 +196,12 @@ class Ojos:
 
     def actualizar(self, dt: float):
         self._t += dt
+
+        # Gesto en curso (se apaga solo al cumplir su duración)
+        if self._gesto is not None:
+            self._gesto_t += dt
+            if self._gesto_t >= self._gesto_dur:
+                self._gesto = None
 
         # Suavizado de la mirada
         k = min(1.0, dt * 9.0)
@@ -133,6 +241,8 @@ class Ojos:
             bob = -abs(math.sin(self._t * 6.0)) * 10      # saltitos de emoción
         elif self.animo == self.TRISTE:
             bob = 8                                        # mirada caída
+        elif self.animo == self.HABLANDO:
+            bob = math.sin(self._t * 5.0) * 4             # acompaña a la voz
         else:
             bob = math.sin(self._t * 1.6) * 3             # respiración
         cy = int(cy + bob * s)
@@ -140,16 +250,34 @@ class Ojos:
         # Desplazamiento por la mirada
         dx = (self._mxs - 0.5) * 2.0
         dy = (self._mys - 0.5) * 2.0
-        gx = dx * 24 * s
-        gy = dy * 15 * s
+        gx = dx * self.rango_x * s
+        gy = dy * self.rango_y * s
 
         w = self.base_w * self._wf * s
         h = self.base_h * self._hf * s * (1.0 - self._parp)
 
-        for lado in (-1, 1):
+        # ── Gestos: desplazan/achatan los ojos por encima de todo lo anterior ──
+        cierre = [0.0, 0.0]        # cierre extra por ojo (0 = abierto)
+        if self._gesto:
+            p = self._gesto_t / self._gesto_dur      # progreso 0..1
+            if self._gesto == "guino":
+                # Un solo ojo se cierra y se abre (medio seno)
+                idx = 1 if self._gesto_lado > 0 else 0
+                cierre[idx] = math.sin(p * math.pi)
+            elif self._gesto == "asentir":
+                gy += math.sin(p * math.pi * 2) * self.base_h * 0.30 * s
+            elif self._gesto == "negar":
+                gx += math.sin(p * math.pi * 4) * self.base_w * 0.30 * s
+            elif self._gesto == "saltar":
+                cy -= int(abs(math.sin(p * math.pi)) * self.base_h * 0.45 * s)
+            elif self._gesto == "alrededor":
+                gx += math.sin(p * math.pi * 2) * self.rango_x * 1.6 * s
+
+        for i, lado in enumerate((-1, 1)):
             ex = cx + lado * (self.sep * 0.5) * s + gx
             ey = cy + gy
-            self._ojo(sup, lado, ex, ey, w, max(2.0, h), s)
+            hh = h * (1.0 - cierre[i])
+            self._ojo(sup, lado, ex, ey, w, max(2.0, hh), s)
 
     def _ojo(self, sup, lado, ex, ey, w, h, s):
         # Ojos de estrella: reemplazan el rectángulo redondeado.
@@ -158,6 +286,13 @@ class Ojos:
             r = w * 0.60 * pulso
             pygame.draw.polygon(sup, self.ESTRELLA,
                                 self._estrella(ex, ey, r, r * 0.45))
+            return
+
+        # Ojos de corazón: para la invitación a unirse al club.
+        if self.animo == self.AMOR:
+            pulso = 1.0 + math.sin(self._t * 5.0) * 0.10
+            pygame.draw.polygon(sup, self.CORAZON,
+                                self._corazon(ex, ey, w * 0.62 * pulso))
             return
 
         rect = pygame.Rect(0, 0, int(w), int(h))
@@ -202,24 +337,36 @@ class Ojos:
         return pts
 
     @staticmethod
+    def _corazon(cx, cy, r, pasos=28):
+        """Corazón paramétrico, centrado y escalado a un radio `r`."""
+        pts = []
+        for i in range(pasos):
+            t = 2.0 * math.pi * i / pasos
+            x = 16 * math.sin(t) ** 3
+            y = -(13 * math.cos(t) - 5 * math.cos(2 * t)
+                  - 2 * math.cos(3 * t) - math.cos(4 * t))
+            pts.append((cx + x * r / 16.0, cy + y * r / 16.0))
+        return pts
+
+    @staticmethod
     def _sortear() -> float:
         return random.uniform(2.2, 5.5)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DEMO:  python3 ojos.py           → ventana interactiva (teclas 1-7, mouse mira)
-#        python3 ojos.py --lamina out.png   → guarda una lámina con las 7 caras
+# DEMO:  python3 ojos.py           → ventana interactiva (teclas 1-9, mouse mira)
+#        python3 ojos.py --lamina out.png   → guarda una lámina con las caras
 # ─────────────────────────────────────────────────────────────────────────────
 
 _MOODS = [Ojos.NEUTRO, Ojos.FELIZ, Ojos.ENOJADO, Ojos.SORPRENDIDO,
-          Ojos.TRISTE, Ojos.ESTRELLADO, Ojos.DORMIDO]
+          Ojos.TRISTE, Ojos.ESTRELLADO, Ojos.DORMIDO, Ojos.AMOR, Ojos.HABLANDO]
 
 
 def _lamina(path):
     import os
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     pygame.init()
-    cols, filas = 4, 2
+    cols, filas = 5, 2
     cw, ch = 360, 240
     W, H = cols * cw, filas * ch
     sup = pygame.Surface((W, H))
@@ -228,12 +375,13 @@ def _lamina(path):
     for i, m in enumerate(_MOODS):
         cx = (i % cols) * cw + cw // 2
         cy = (i // cols) * ch + ch // 2
-        o = Ojos(sep=190)
+        o = Ojos()
+        o.ajustar_a(cw, ch - 40)
         o.set_animo(m)
         o.mirar(0.5, 0.45)
         for _ in range(40):
             o.actualizar(1 / 60)
-        o.dibujar(sup, cx, cy - 12, escala=0.62)
+        o.dibujar(sup, cx, cy - 12)
         etiqueta = fuente.render(m.upper(), True, (150, 160, 175))
         sup.blit(etiqueta, etiqueta.get_rect(center=(cx, cy + ch // 2 - 20)))
     pygame.image.save(sup, path)
@@ -243,12 +391,13 @@ def _lamina(path):
 def _demo():
     pygame.init()
     ANCHO, ALTO = 900, 500
-    pantalla = pygame.display.set_mode((ANCHO, ALTO))
-    pygame.display.set_caption("Ojos — demo (1-7 emociones · mouse mira · ESC)")
+    pantalla = pygame.display.set_mode((ANCHO, ALTO), pygame.RESIZABLE)
+    pygame.display.set_caption("Ojos — 1-9 emociones · G guiño · A sí · N no · S salto · ESC")
     fuente = pygame.font.SysFont("dejavusans", 20)
     reloj = pygame.time.Clock()
 
     ojos = Ojos()
+    ojos.ajustar_a(ANCHO, int(ALTO * 0.86))
     idx = 0
     ojos.set_animo(_MOODS[idx])
 
@@ -258,20 +407,31 @@ def _demo():
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
                 corriendo = False
+            elif ev.type == pygame.VIDEORESIZE:
+                ANCHO, ALTO = ev.w, ev.h
+                pantalla = pygame.display.set_mode((ANCHO, ALTO), pygame.RESIZABLE)
+                ojos.ajustar_a(ANCHO, int(ALTO * 0.86))
             elif ev.type == pygame.KEYDOWN:
                 if ev.key == pygame.K_ESCAPE:
                     corriendo = False
-                elif pygame.K_1 <= ev.key <= pygame.K_7:
-                    idx = ev.key - pygame.K_1
-                    ojos.set_animo(_MOODS[idx])
+                elif pygame.K_1 <= ev.key <= pygame.K_9:
+                    i = ev.key - pygame.K_1
+                    if i < len(_MOODS):
+                        idx = i
+                        ojos.set_animo(_MOODS[idx])
+                elif ev.key == pygame.K_g: ojos.guinar()
+                elif ev.key == pygame.K_a: ojos.asentir()
+                elif ev.key == pygame.K_n: ojos.negar()
+                elif ev.key == pygame.K_s: ojos.saltar()
+                elif ev.key == pygame.K_m: ojos.mirar_alrededor()
 
         mx, my = pygame.mouse.get_pos()
         ojos.mirar(mx / ANCHO, my / ALTO)
         ojos.actualizar(dt)
 
         pantalla.fill(Ojos.FONDO)
-        ojos.dibujar(pantalla, ANCHO // 2, ALTO // 2 - 10, escala=1.0)
-        ayuda = fuente.render(f"{ojos.animo.upper()}   ·   1-7 emociones · mouse mira · ESC",
+        ojos.dibujar(pantalla, ANCHO // 2, int(ALTO * 0.46))
+        ayuda = fuente.render(f"{ojos.animo.upper()}   ·   1-9 emociones · G guiño · A sí · N no · S salto · M alrededor",
                               True, (140, 150, 165))
         pantalla.blit(ayuda, ayuda.get_rect(center=(ANCHO // 2, ALTO - 26)))
         pygame.display.flip()

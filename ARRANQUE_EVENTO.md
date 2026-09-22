@@ -72,6 +72,17 @@ ROBOT_URL_ENCUESTA=https://TU_LINK.ngrok-free.dev/encuesta ROBOT_PC_IP=IP_DE_LA_
 En el monitor de la Pi salen los ojos. Verificá el puntito **"visión ok"** (verde).
 **Dejá esta ventana abierta.**
 
+Esa misma ventana levanta la **VOZ del robot** e imprime su dirección:
+
+```
+[VOZ] Servidor listo. En el celular: http://<IP-de-la-Pi>:8090
+```
+
+Al arrancar, la pantalla muestra **12 s un QR** con esa dirección (o tecla **V**).
+En el celular: abrir el link → **🔊 Activar voz** → subir volumen. Ahí se escucha
+lo que el robot dice y salen las instrucciones de cada paso.
+Detalles y cómo cambiar el guion: **VOZ_Y_GESTOS.md**.
+
 ---
 
 ## 6. Raspberry — VENTANA SSH 2: MOVIMIENTO
@@ -118,7 +129,7 @@ En el celular (hotspot): **`http://10.172.223.131:8080`** → joystick + PARAR.
 2. Hotspot ON → PC, Pi, celu-cámara. `ipconfig` (IP PC).
 3. PC: `py robot_server.py` + `ngrok http 8000` + dashboard.
 4. Cámara: IP Webcam → URL en `config.json`.
-5. Pi ventana 1: `interaccion_ojos.py` (ojos).
+5. Pi ventana 1: `interaccion_ojos.py` (ojos + voz en el celular :8090).
 6. Pi ventana 2: `recorrido.py` (auto) **o** `control_manual.py` (manual).
 
 ## Si algo falla
@@ -131,3 +142,5 @@ En el celular (hotspot): **`http://10.172.223.131:8080`** → joystick + PARAR.
 | El robot no se mueve | Programa corriendo en la máquina equivocada, o `ls /dev/ttyUSB*` no muestra nada (revisá el USB) |
 | "no pude abrir el puerto" | Otro programa lo ocupa (recorrido y control no van juntos), o puerto equivocado |
 | El QR de la encuesta no abre en el celu | Sin Ngrok y con datos móviles no llega; usá el link de Ngrok |
+| El celular no habla | Falta tocar «Activar voz» una vez, o el volumen está bajo |
+| "Sin conexión con el robot" en el celu | Salió del hotspot, o la IP de la Pi cambió (tecla **V** muestra el QR nuevo) |
